@@ -32,51 +32,73 @@
   const savePrefs = () => store.set(PREFS_KEY, prefs);
 
   // ---------- state ----------
+  // The game is a move tree (see pgn.js). children[0] continues the current
+  // line; any further children are alternative moves from that position.
   const S = {
     game: null,       // library entry
-    sans: [],
-    verbose: [],      // chess.js verbose moves
-    comments: {},
-    fens: [],
-    ply: 0,
+    root: null,       // tree root (start position, holds the introduction)
+    node: null,       // current position
+    nodes: new Map(), // id -> node, for clicks in the move list
     orientation: 'w',
     mode: 'replay',
     playing: null,    // autoplay interval
-    selected: null,   // quiz: selected square
+    selected: null,   // selected square on the board
     wrong: null,      // quiz: [from, to] of last wrong try
+    hinted: false,
     score: { right: 0, tries: 0 },
-    timer: null       // quiz: pending opponent reply
+    timer: null,      // quiz: pending opponent reply
+    promo: null       // pending promotion { from, to }
+  };
+  let nextId = 1;
+
+  const emptyTree = () => PGN.buildTree(Chess, PGN.parsePgn('').root);
+  const index = (node) => {
+    node.id = nextId++;
+    S.nodes.set(node.id, node);
+    node.children.forEach(index);
   };
 
   function loadGame(id) {
     stopAutoplay();
     clearTimeout(S.timer);
     const game = library.find((g) => g.id === id) || library[0];
-    if (!game) { S.game = null; render(); renderLibrary(); return; }
-    const parsed = PGN.parsePgn(game.pgn);
-    let verbose = [];
-    try { verbose = PGN.validateMoves(Chess, parsed.moves); }
-    catch (err) { alert(`Could not load "${title(game)}": ${err.message}`); }
-    const chess = new Chess();
-    const fens = [chess.fen()];
-    verbose.forEach((m) => { chess.move(m.san); fens.push(chess.fen()); });
-
+    let root = emptyTree();
+    if (game) {
+      try { root = PGN.buildTree(Chess, PGN.parsePgn(game.pgn).root); }
+      catch (err) { alert(`Could not load "${title(game)}": ${err.message}`); }
+    }
+    S.nodes = new Map();
+    index(root);
     Object.assign(S, {
-      game, verbose, fens,
-      sans: verbose.map((m) => m.san),
-      comments: parsed.comments,
-      ply: 0, selected: null, wrong: null,
+      game: game || null, root, node: root,
+      selected: null, wrong: null, hinted: false,
       score: { right: 0, tries: 0 },
       orientation: S.mode === 'quiz' ? prefs.quizSide : 'w'
     });
-    prefs.lastId = game.id;
-    savePrefs();
+    if (game) { prefs.lastId = game.id; savePrefs(); }
     renderLibrary();
     render();
     if (S.mode === 'quiz') quizStep();
   }
 
+  function saveTree() {
+    S.game.pgn = PGN.toPgn(S.root, S.game.result);
+    saveLibrary();
+  }
+
   const title = (g) => `${g.white} vs ${g.black}`;
+  const mainLine = () => PGN.mainLine(S.root);
+  const isMain = (node) => {
+    for (let n = node; n.parent; n = n.parent) if (n.parent.children[0] !== n) return false;
+    return true;
+  };
+  // Last game position this node shares with the main line.
+  const mainAncestor = (node) => {
+    let n = node;
+    while (!isMain(n)) n = n.parent;
+    return n;
+  };
+  const moveLabel = (n) => `${Math.ceil(n.ply / 2)}${n.ply % 2 ? '.' : '...'} ${n.san}`;
 
   // ---------- rendering ----------
   function render() {
@@ -84,16 +106,16 @@
     renderInfo();
     renderNote();
     renderMoves();
+    renderVarBar();
     renderQuiz();
   }
 
   function renderBoard() {
     const board = $('#board');
-    board.classList.toggle('quiz', S.mode === 'quiz');
     board.replaceChildren();
-    const chess = new Chess(S.fens[S.ply] || undefined);
+    const node = S.node;
+    const chess = new Chess(node.fen);
     const grid = chess.board(); // grid[0] is rank 8
-    const last = S.verbose[S.ply - 1];
     const turn = chess.turn();
     let checkSq = null;
     if (chess.in_check()) {
@@ -112,16 +134,14 @@
       const piece = grid[r][f];
       const cell = el('div', `sq ${(r + f) % 2 ? 'dark' : 'light'}`);
       cell.dataset.sq = sq;
-      if (last && (sq === last.from || sq === last.to)) cell.classList.add('last');
+      if (node.from && (sq === node.from || sq === node.to)) cell.classList.add('last');
       if (sq === checkSq) cell.classList.add('check');
       if (sq === S.selected) cell.classList.add('sel');
       if (S.wrong && S.wrong.includes(sq)) cell.classList.add('wrong');
       if (targets.includes(sq)) cell.classList.add('target', piece ? 'occupied' : 'empty');
       if (piece) cell.appendChild(el('span', `piece ${piece.color}`, GLYPHS[piece.type] + '︎'));
-      const bottomRow = i >= 56;
-      const leftCol = i % 8 === 0;
-      if (bottomRow) cell.appendChild(el('span', 'coord file', FILES[f]));
-      if (leftCol) cell.appendChild(el('span', 'coord rank', String(8 - r)));
+      if (i >= 56) cell.appendChild(el('span', 'coord file', FILES[f]));
+      if (i % 8 === 0) cell.appendChild(el('span', 'coord rank', String(8 - r)));
       board.appendChild(cell);
     }
 
@@ -135,12 +155,15 @@
     const top = S.orientation === 'w' ? 'b' : 'w';
     $('#top-player').replaceChildren(label(g ? (top === 'w' ? g.white : g.black) : '', top));
     $('#bottom-player').replaceChildren(label(g ? (top === 'w' ? g.black : g.white) : '', top === 'w' ? 'b' : 'w'));
+
+    const main = isMain(node);
     let status = `${turn === 'w' ? 'White' : 'Black'} to move`;
     if (chess.in_checkmate()) status = 'Checkmate';
     else if (chess.in_stalemate()) status = 'Stalemate';
-    else if (S.ply === S.sans.length && S.sans.length && g) status = `Final position · ${g.result}`;
+    else if (main && node !== S.root && !node.children.length && g) status = `Final position · ${g.result}`;
     $('#turn').textContent = status;
-    $('#ply-label').textContent = S.sans.length ? `Move ${S.ply} / ${S.sans.length}` : '';
+    const total = mainLine().length;
+    $('#ply-label').textContent = !total ? '' : main ? `Move ${node.ply} / ${total}` : 'Alternative line';
   }
 
   function renderInfo() {
@@ -149,27 +172,21 @@
     $('#g-meta').textContent = g
       ? [g.event, g.year, g.opening, g.result].filter(Boolean).join(' · ')
       : 'Add a game to get started.';
-    const tags = $('#g-tags');
-    tags.replaceChildren(...((g && g.tags) || []).map((t) =>
+    $('#g-tags').replaceChildren(...((g && g.tags) || []).map((t) =>
       el('span', 'text-[11px] bg-slate-700/80 text-slate-300 rounded-full px-2 py-0.5', t)));
     $('#btn-edit-game').disabled = $('#btn-delete-game').disabled = !g;
   }
 
-  function moveLabel(ply) {
-    const idx = ply - 1;
-    const num = Math.floor(idx / 2) + 1;
-    return `${num}${idx % 2 ? '...' : '.'} ${S.sans[idx]}`;
-  }
-
   function renderNote() {
-    const note = S.comments[S.ply];
-    $('#note-title').textContent = S.ply === 0 ? 'Introduction' : moveLabel(S.ply);
+    const node = S.node;
+    const main = isMain(node);
+    $('#note-title').textContent = node === S.root ? 'Introduction' : moveLabel(node) + (main ? '' : '  (alternative)');
     const p = $('#note-text');
-    if (note) {
-      p.textContent = note;
+    if (node.comment) {
+      p.textContent = node.comment;
       p.className = 'mt-2 text-sm leading-relaxed whitespace-pre-line text-slate-100';
     } else {
-      p.textContent = S.ply === 0
+      p.textContent = node === S.root
         ? 'No introduction yet. Use the arrows or ← → keys to step through the game.'
         : 'No commentary for this move. Click ✎ Edit to add your own notes.';
       p.className = 'mt-2 text-sm leading-relaxed whitespace-pre-line text-slate-500 italic';
@@ -177,30 +194,96 @@
     $('#note-editor').classList.add('hidden');
     p.classList.remove('hidden');
     $('#btn-edit-note').classList.toggle('invisible', !S.game);
+
+    // Every move already recorded from this position, so alternatives are easy to find.
+    const kids = S.mode === 'quiz' ? [] : node.children;
+    $('#branches').classList.toggle('hidden', kids.length < 2);
+    $('#branch-list').replaceChildren(...(kids.length < 2 ? [] : kids.map((child, i) => {
+      const b = el('button', `text-sm font-mono rounded px-2 py-1 ${i === 0 ? 'bg-slate-600 hover:bg-slate-500' : 'bg-sky-900/70 hover:bg-sky-800 text-sky-100'}`,
+        moveLabel(child));
+      if (i === 0) b.appendChild(el('span', 'ml-1 text-[10px] text-slate-300 font-sans', isMain(child) ? 'game' : 'main'));
+      b.addEventListener('click', () => goTo(child));
+      return b;
+    })));
+  }
+
+  function moveSpan(node, text) {
+    const span = el('span', 'mv', text);
+    if (node.comment) { span.classList.add('has-note'); span.title = node.comment; }
+    if (node === S.node) span.classList.add('cur');
+    span.dataset.id = node.id;
+    return span;
+  }
+
+  // An alternative line written inline: "11... Qe7 12. Nf3 (12. Bd3 Qf6) 12... Nf6".
+  function inlineLine(first, out) {
+    out.appendChild(moveSpan(first, moveLabel(first)));
+    let needNum = false;
+    for (let node = first; node.children.length; ) {
+      const [main, ...alts] = node.children;
+      out.appendChild(moveSpan(main, main.ply % 2 || needNum ? moveLabel(main) : main.san));
+      needNum = false;
+      alts.forEach((alt) => {
+        out.appendChild(el('span', 'num', '('));
+        inlineLine(alt, out);
+        out.appendChild(el('span', 'num', ')'));
+        needNum = true;
+      });
+      node = main;
+    }
   }
 
   function renderMoves() {
     const box = $('#moves');
     box.replaceChildren();
     const grid = el('div', 'grid grid-cols-[2.5rem_1fr_1fr] gap-y-0.5 items-center');
-    const cell = (ply) => {
-      if (ply > S.sans.length) return el('span');
-      const span = el('span', 'mv', S.sans[ply - 1]);
-      if (S.comments[ply]) { span.classList.add('has-note'); span.title = S.comments[ply]; }
-      if (ply === S.ply) span.classList.add('cur');
-      span.dataset.ply = ply;
-      return span;
-    };
-    for (let ply = 1; ply <= S.sans.length; ply += 2) {
-      grid.appendChild(el('span', 'text-slate-500 text-right pr-2', `${(ply + 1) / 2}.`));
-      grid.appendChild(cell(ply));
-      grid.appendChild(cell(ply + 1));
+    const num = (n) => el('span', 'text-slate-500 text-right pr-2', `${Math.ceil(n.ply / 2)}.`);
+
+    let prev = S.root;
+    let rowOpen = false; // a white move is waiting for black's reply in this row
+    while (prev.children.length) {
+      const [main, ...alts] = prev.children;
+      if (main.ply % 2) { grid.appendChild(num(main)); grid.appendChild(moveSpan(main, main.san)); rowOpen = true; }
+      else {
+        if (!rowOpen) { grid.appendChild(num(main)); grid.appendChild(el('span', 'text-slate-500 px-1', '…')); }
+        grid.appendChild(moveSpan(main, main.san));
+        rowOpen = false;
+      }
+      if (alts.length) {
+        if (rowOpen) grid.appendChild(el('span', 'text-slate-500 px-1', '…'));
+        const block = el('div', 'col-span-3 var-block my-1 ml-3 pl-2 space-y-0.5 text-[13px] text-sky-200/90');
+        alts.forEach((alt) => {
+          const line = el('div', 'var-line leading-relaxed');
+          inlineLine(alt, line);
+          block.appendChild(line);
+        });
+        grid.appendChild(block);
+        rowOpen = false;
+      }
+      prev = main;
     }
+    if (rowOpen) grid.appendChild(el('span'));
     box.appendChild(grid);
-    if (S.game) box.appendChild(el('div', 'mt-2 text-center text-slate-400', S.game.result));
+    if (S.game && S.root.children.length) box.appendChild(el('div', 'mt-2 text-center text-slate-400', S.game.result));
     const cur = box.querySelector('.cur');
     if (cur) cur.scrollIntoView({ block: 'nearest' });
     else box.scrollTop = 0;
+  }
+
+  function renderVarBar() {
+    const bar = $('#var-bar');
+    const show = S.mode === 'replay' && !!S.game;
+    bar.classList.toggle('hidden', !show);
+    bar.classList.toggle('flex', show);
+    if (!show) return;
+    const inVariation = !isMain(S.node);
+    $('#var-label').textContent = inVariation
+      ? 'You are in an alternative line.'
+      : 'Tip: play any move on the board to explore an alternative.';
+    $('#var-label').className = inVariation ? 'text-sky-300' : 'text-slate-400 text-xs';
+    $('#btn-mainline').classList.toggle('hidden', !inVariation);
+    // The last game move can be removed too, e.g. moves added after the game ended.
+    $('#btn-del-line').classList.toggle('hidden', !inVariation && (S.node === S.root || S.node.children.length > 0));
   }
 
   function renderLibrary() {
@@ -223,10 +306,11 @@
   }
 
   // ---------- navigation ----------
-  function goTo(ply) {
-    ply = Math.max(0, Math.min(S.sans.length, ply));
+  function goTo(node) {
+    if (!node) return;
     clearTimeout(S.timer);
-    S.ply = ply;
+    hidePromo();
+    S.node = node;
     S.selected = null;
     S.wrong = null;
     S.hinted = false;
@@ -234,11 +318,12 @@
     if (S.mode === 'quiz') quizStep();
   }
 
+  const lineEnd = (node) => { while (node.children.length) node = node.children[0]; return node; };
   const nav = {
-    first: () => goTo(0),
-    prev: () => goTo(S.ply - 1),
-    next: () => goTo(S.ply + 1),
-    last: () => goTo(S.sans.length)
+    first: () => goTo(S.root),
+    prev: () => goTo(S.node.parent),
+    next: () => goTo(S.node.children[0]),
+    last: () => goTo(lineEnd(S.node))
   };
 
   function stopAutoplay() {
@@ -250,12 +335,87 @@
   function toggleAutoplay() {
     if (S.playing) return stopAutoplay();
     if (S.mode === 'quiz') setMode('replay');
-    if (S.ply >= S.sans.length) goTo(0);
+    if (!S.node.children.length) goTo(S.root);
     $('#btn-play').innerHTML = PAUSE_ICON;
     S.playing = setInterval(() => {
-      if (S.ply >= S.sans.length) return stopAutoplay();
-      goTo(S.ply + 1);
+      if (!S.node.children.length) return stopAutoplay();
+      goTo(S.node.children[0]);
     }, 1600);
+  }
+
+  // ---------- playing moves on the board ----------
+  function onBoardClick(e) {
+    if (!S.game || S.promo) return;
+    const cell = e.target.closest('.sq');
+    if (!cell) return;
+    if (S.mode === 'quiz' && (!S.node.children.length || sideToMove() !== prefs.quizSide)) return;
+    const sq = cell.dataset.sq;
+    const chess = new Chess(S.node.fen);
+
+    if (S.selected) {
+      const options = chess.moves({ square: S.selected, verbose: true }).filter((m) => m.to === sq);
+      if (options.length) {
+        const from = S.selected;
+        if (options.some((m) => m.promotion)) return showPromo(from, sq, chess.turn());
+        return S.mode === 'quiz' ? tryMove(from, sq) : playMove({ from, to: sq });
+      }
+    }
+    const piece = chess.get(sq);
+    S.wrong = null;
+    S.selected = piece && piece.color === chess.turn() && S.selected !== sq ? sq : null;
+    renderBoard();
+  }
+
+  function showPromo(from, to, color) {
+    S.promo = { from, to };
+    $('#promo-choices').replaceChildren(...['q', 'r', 'b', 'n'].map((p) => {
+      const b = el('button', 'w-14 h-14 rounded-lg bg-[#eedfc4] hover:bg-amber-200 flex items-center justify-center');
+      const glyph = el('span', `piece ${color}`, GLYPHS[p] + '︎');
+      glyph.style.fontSize = '2.6rem';
+      b.appendChild(glyph);
+      b.addEventListener('click', () => {
+        hidePromo();
+        if (S.mode === 'quiz') tryMove(from, to, p);
+        else playMove({ from, to, promotion: p });
+      });
+      return b;
+    }));
+    $('#promo').classList.replace('hidden', 'flex');
+  }
+
+  function hidePromo() {
+    S.promo = null;
+    $('#promo').classList.replace('flex', 'hidden');
+  }
+
+  // Follows an existing move if it was already recorded, otherwise adds it as
+  // a new alternative from the current position and saves the game.
+  function playMove({ from, to, promotion }) {
+    const chess = new Chess(S.node.fen);
+    const mv = chess.move({ from, to, promotion: promotion || 'q' });
+    if (!mv) return;
+    const existing = S.node.children.find((c) => c.san === mv.san);
+    if (existing) return goTo(existing);
+    const node = { san: mv.san, from: mv.from, to: mv.to, fen: chess.fen(), ply: S.node.ply + 1,
+      comment: '', children: [], parent: S.node };
+    S.node.children.push(node);
+    index(node);
+    saveTree();
+    goTo(node);
+  }
+
+  function deleteLine() {
+    const node = S.node;
+    if (!node.parent || (isMain(node) && node.children.length)) return;
+    const after = node.children.length ? ' and the moves after it' : '';
+    const warning = isMain(node) ? ' It is the last move of the game itself.' : '';
+    if (!confirm(`Delete ${moveLabel(node)}${after}?${warning}`)) return;
+    const parent = node.parent;
+    parent.children = parent.children.filter((c) => c !== node);
+    const drop = (n) => { S.nodes.delete(n.id); n.children.forEach(drop); };
+    drop(node);
+    saveTree();
+    goTo(parent);
   }
 
   // ---------- guess-the-move mode ----------
@@ -263,6 +423,7 @@
     S.mode = mode;
     stopAutoplay();
     clearTimeout(S.timer);
+    hidePromo();
     S.selected = null;
     S.wrong = null;
     document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
@@ -272,12 +433,14 @@
     if (mode === 'quiz') {
       S.score = { right: 0, tries: 0 };
       S.orientation = prefs.quizSide;
+      if (S.node) S.node = mainAncestor(S.node); // the quiz follows the game itself
     }
+    if (!S.node) return;
     render();
     if (mode === 'quiz') quizStep();
   }
 
-  const sideToMove = () => (S.ply % 2 === 0 ? 'w' : 'b');
+  const sideToMove = () => (S.node.ply % 2 === 0 ? 'w' : 'b');
   const quizMsg = (text, tone = 'text-slate-300') => {
     const p = $('#quiz-msg');
     p.textContent = text;
@@ -287,13 +450,13 @@
   function quizStep() {
     if (S.mode !== 'quiz' || !S.game) return;
     clearTimeout(S.timer);
-    if (S.ply >= S.sans.length) {
+    if (!S.node.children.length) {
       quizMsg(`End of game (${S.game.result}). You found ${S.score.right} of the moves on your first try. Press ⏮ to try again.`, 'text-amber-300');
       return;
     }
     if (sideToMove() !== prefs.quizSide) {
       quizMsg('Opponent is moving…', 'text-slate-400');
-      S.timer = setTimeout(() => goTo(S.ply + 1), 700);
+      S.timer = setTimeout(() => goTo(S.node.children[0]), 700);
       return;
     }
     const name = prefs.quizSide === 'w' ? S.game.white : S.game.black;
@@ -305,61 +468,44 @@
     $('#quiz-score').textContent = tries ? `· ${right}/${tries} correct` : '';
   }
 
-  function onBoardClick(e) {
-    if (S.mode !== 'quiz' || !S.game) return;
-    const cell = e.target.closest('.sq');
-    if (!cell || S.ply >= S.sans.length || sideToMove() !== prefs.quizSide) return;
-    const sq = cell.dataset.sq;
-    const chess = new Chess(S.fens[S.ply]);
-    const piece = chess.get(sq);
-
-    if (S.selected) {
-      const legal = chess.moves({ square: S.selected, verbose: true }).find((m) => m.to === sq);
-      if (legal) return tryMove(S.selected, sq);
-    }
-    S.wrong = null;
-    S.selected = piece && piece.color === chess.turn() && S.selected !== sq ? sq : null;
-    renderBoard();
-  }
-
-  function tryMove(from, to) {
-    const expected = S.verbose[S.ply];
+  function tryMove(from, to, promotion) {
+    const expected = S.node.children[0];
     const firstTry = !S.wrong && !S.hinted;
-    if (expected.from === from && expected.to === to) {
+    const chess = new Chess(S.node.fen);
+    const san = chess.move({ from, to, promotion: promotion || 'q' }).san;
+    if (san === expected.san) {
       if (firstTry) S.score.right++;
       S.score.tries++;
-      S.hinted = false;
-      const san = expected.san;
-      goTo(S.ply + 1);
-      if (S.ply < S.sans.length) {
+      goTo(expected);
+      if (S.node.children.length) {
         quizMsg(`✓ Correct, ${san}! ${sideToMove() !== prefs.quizSide ? 'Opponent is moving…' : ''}`, 'text-emerald-400');
       }
       return;
     }
-    const chess = new Chess(S.fens[S.ply]);
-    const san = chess.move({ from, to, promotion: 'q' }).san;
+    const known = S.node.children.find((c) => c.san === san);
     S.selected = null;
     S.wrong = [from, to];
     renderBoard();
-    quizMsg(`✗ ${san} is legal, but it is not what was played. Try again.`, 'text-red-400');
+    quizMsg(known
+      ? `✗ ${san} is analysed as an alternative here, but it is not what was played. Try again.`
+      : `✗ ${san} is legal, but it is not what was played. Try again.`, 'text-red-400');
   }
 
   function hint() {
-    if (S.mode !== 'quiz' || S.ply >= S.sans.length || sideToMove() !== prefs.quizSide) return;
+    if (S.mode !== 'quiz' || !S.node.children.length || sideToMove() !== prefs.quizSide) return;
     S.hinted = true;
     S.wrong = null;
-    S.selected = S.verbose[S.ply].from;
+    S.selected = S.node.children[0].from;
     renderBoard();
     quizMsg('Hint: the highlighted piece moves.', 'text-amber-300');
   }
 
   function reveal() {
-    if (S.mode !== 'quiz' || S.ply >= S.sans.length || sideToMove() !== prefs.quizSide) return;
+    if (S.mode !== 'quiz' || !S.node.children.length || sideToMove() !== prefs.quizSide) return;
     S.score.tries++;
-    S.hinted = false;
-    const san = S.sans[S.ply];
-    goTo(S.ply + 1);
-    quizMsg(`The game move was ${san}. Read the note, then continue.`, 'text-amber-300');
+    const move = S.node.children[0];
+    goTo(move);
+    quizMsg(`The game move was ${move.san}. Read the note, then continue.`, 'text-amber-300');
     clearTimeout(S.timer);
     S.timer = setTimeout(quizStep, 2500);
   }
@@ -367,18 +513,15 @@
   // ---------- commentary editing ----------
   function editNote() {
     if (!S.game) return;
-    $('#note-input').value = S.comments[S.ply] || '';
+    $('#note-input').value = S.node.comment || '';
     $('#note-text').classList.add('hidden');
     $('#note-editor').classList.remove('hidden');
     $('#note-input').focus();
   }
 
   function saveNote() {
-    const text = $('#note-input').value.trim();
-    if (text) S.comments[S.ply] = text;
-    else delete S.comments[S.ply];
-    S.game.pgn = PGN.toPgn(S.sans, S.comments, S.game.result);
-    saveLibrary();
+    S.node.comment = $('#note-input').value.trim();
+    saveTree();
     renderNote();
     renderMoves();
   }
@@ -412,8 +555,8 @@
   // Builds a library entry from a PGN + metadata; throws on invalid moves.
   function buildGame(meta, pgn) {
     const parsed = PGN.parsePgn(pgn);
-    if (!parsed.moves.length) throw new Error('No moves found in the PGN.');
-    PGN.validateMoves(Chess, parsed.moves);
+    if (!parsed.root.children.length) throw new Error('No moves found in the PGN.');
+    PGN.buildTree(Chess, parsed.root);
     const h = parsed.headers;
     return {
       id: meta.id || `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -512,10 +655,16 @@
   $('#btn-play').addEventListener('click', toggleAutoplay);
   $('#btn-flip').addEventListener('click', () => { S.orientation = S.orientation === 'w' ? 'b' : 'w'; renderBoard(); });
   $('#board').addEventListener('click', onBoardClick);
+  $('#promo').addEventListener('click', (e) => { if (e.target.id === 'promo') { hidePromo(); renderBoard(); } });
   $('#moves').addEventListener('click', (e) => {
-    const m = e.target.closest('[data-ply]');
-    if (m) { stopAutoplay(); goTo(Number(m.dataset.ply)); }
+    const m = e.target.closest('[data-id]');
+    if (!m) return;
+    stopAutoplay();
+    if (S.mode === 'quiz') setMode('replay');
+    goTo(S.nodes.get(Number(m.dataset.id)));
   });
+  $('#btn-mainline').addEventListener('click', () => goTo(mainAncestor(S.node)));
+  $('#btn-del-line').addEventListener('click', deleteLine);
   $('#search').addEventListener('input', renderLibrary);
   $('#btn-add').addEventListener('click', () => openGameDialog(null));
   $('#btn-edit-game').addEventListener('click', () => openGameDialog(S.game));
@@ -546,6 +695,7 @@
     if (keys[e.key]) { e.preventDefault(); stopAutoplay(); keys[e.key](); }
     else if (e.key === ' ') { e.preventDefault(); toggleAutoplay(); }
     else if (e.key === 'f' || e.key === 'F') $('#btn-flip').click();
+    else if (e.key === 'Escape' && S.promo) { hidePromo(); renderBoard(); }
   });
 
   $('#quiz-side').value = prefs.quizSide;

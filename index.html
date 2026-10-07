@@ -20,7 +20,7 @@
     .piece { position: relative; z-index: 1; font-size: 10cqw; line-height: 1; cursor: default; }
     .piece.w { color: #fff; -webkit-text-stroke: 1.4px #1f2937; text-shadow: 0 2px 2px rgba(0,0,0,.35); }
     .piece.b { color: #111827; text-shadow: 0 1px 1px rgba(255,255,255,.25); }
-    .quiz .piece { cursor: pointer; }
+    .piece { cursor: pointer; }
     .coord { position: absolute; font-size: 2.1cqw; font-weight: 600; z-index: 2; pointer-events: none; }
     .coord.file { right: 4%; bottom: 2%; }
     .coord.rank { left: 4%; top: 2%; }
@@ -31,6 +31,9 @@
     .mv.cur { background: #f59e0b; color: #111827; font-weight: 600; }
     .mv.has-note { text-decoration: underline dotted #f59e0b 2px; text-underline-offset: 3px; }
     .mv.cur.has-note { text-decoration-color: #111827; }
+    .var-block { border-left: 2px solid #475569; }
+    .var-line .mv { padding: 0 .2rem; }
+    .var-line .num { color: #64748b; margin-left: .15rem; }
     .scroll-thin::-webkit-scrollbar { width: 6px; }
     .scroll-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   </style>
@@ -66,7 +69,15 @@
           <div id="top-player" class="font-medium truncate"></div>
           <div id="turn" class="text-xs text-slate-400 shrink-0 ml-2"></div>
         </div>
-        <div id="board" class="w-full aspect-square grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden shadow-2xl ring-1 ring-black/40"></div>
+        <div class="relative">
+          <div id="board" class="w-full aspect-square grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden shadow-2xl ring-1 ring-black/40"></div>
+          <div id="promo" class="hidden absolute inset-0 z-10 bg-black/50 rounded-md items-center justify-center">
+            <div class="bg-slate-800 rounded-xl p-3 shadow-2xl">
+              <p class="text-sm text-slate-300 mb-2 text-center">Promote to</p>
+              <div id="promo-choices" class="flex gap-2"></div>
+            </div>
+          </div>
+        </div>
         <div class="flex items-baseline justify-between text-sm mt-2">
           <div id="bottom-player" class="font-medium truncate"></div>
           <div id="ply-label" class="text-xs text-slate-400 shrink-0 ml-2"></div>
@@ -80,6 +91,12 @@
           <button data-nav="last" class="nav-btn" title="End (End)"><svg viewBox="0 0 24 24" class="w-5 h-5 mx-auto" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
           <span class="w-3"></span>
           <button id="btn-flip" class="nav-btn" title="Flip board (F)">⇅</button>
+        </div>
+
+        <div id="var-bar" class="hidden mt-3 flex-wrap items-center justify-center gap-2 text-sm">
+          <span id="var-label" class="text-sky-300"></span>
+          <button id="btn-mainline" class="bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5" title="Jump back to where this line leaves the game">↩ Back to game</button>
+          <button id="btn-del-line" class="bg-slate-700 hover:bg-red-600 rounded px-3 py-1.5" title="Delete this move and everything after it">Delete line</button>
         </div>
 
         <div class="mt-4 bg-slate-800/60 rounded-xl p-3">
@@ -129,6 +146,10 @@
           <button id="btn-edit-note" class="text-xs text-slate-400 hover:text-amber-400">✎ Edit</button>
         </div>
         <p id="note-text" class="mt-2 text-sm leading-relaxed whitespace-pre-line"></p>
+        <div id="branches" class="hidden mt-3 pt-3 border-t border-slate-700">
+          <p class="text-xs text-slate-400 mb-1.5">Moves from here</p>
+          <div id="branch-list" class="flex flex-wrap gap-1.5"></div>
+        </div>
         <div id="note-editor" class="hidden mt-2">
           <textarea id="note-input" rows="5" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm focus:outline-none focus:border-amber-500" placeholder="Write your commentary for this move…"></textarea>
           <div class="mt-2 flex gap-2 justify-end text-sm">
@@ -139,7 +160,7 @@
       </div>
 
       <div class="bg-slate-800/60 rounded-xl p-4 flex flex-col min-h-0 flex-1">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Moves <span class="normal-case font-normal tracking-normal text-slate-500">· underlined moves have notes</span></h3>
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Moves <span class="normal-case font-normal tracking-normal text-slate-500">· underlined = has notes · indented = alternatives</span></h3>
         <div id="moves" class="mt-2 text-sm font-mono overflow-y-auto scroll-thin min-h-24 max-h-72 lg:max-h-none flex-1"></div>
       </div>
     </aside>
@@ -165,7 +186,7 @@
       <label class="block text-sm">PGN with commentary
         <textarea name="pgn" rows="10" class="field font-mono text-xs" required placeholder='{Introduction to the game.}&#10;1. e4 e5 2. Nf3 {Develops and attacks e5.} Nc6 3. Bb5 a6 ...'></textarea>
       </label>
-      <p class="text-xs text-slate-400">Put commentary in <code class="text-amber-300">{curly braces}</code> right after a move. A comment before the first move becomes the introduction. PGN headers like <code class="text-amber-300">[White "…"]</code> fill in the fields above. Variations in parentheses are skipped.</p>
+      <p class="text-xs text-slate-400">Put commentary in <code class="text-amber-300">{curly braces}</code> right after a move. A comment before the first move becomes the introduction. PGN headers like <code class="text-amber-300">[White "…"]</code> fill in the fields above. Alternative lines go in parentheses, e.g. <code class="text-amber-300">2. Nf3 (2. f4 {King's Gambit}) 2... Nc6</code>.</p>
       <p id="form-error" class="text-sm text-red-400 hidden"></p>
       <div class="flex justify-end gap-2 pt-1">
         <button type="button" id="btn-cancel" class="bg-slate-700 hover:bg-slate-600 rounded-lg px-4 py-2 text-sm">Cancel</button>

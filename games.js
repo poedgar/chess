@@ -1,6 +1,6 @@
 // Built-in library of famous games. Commentary lives inside the PGN as {braces}:
 // a comment before the first move is the game introduction, every other comment
-// belongs to the move right before it.
+// belongs to the move right before it. Alternative lines go in (parentheses).
 window.DEFAULT_GAMES = [
   {
     id: 'opera-game',
@@ -14,7 +14,7 @@ window.DEFAULT_GAMES = [
     pgn: `{Played in a box at the Paris Opera during a performance of The Barber of Seville. Morphy's opponents play passively and grab material, while Morphy develops every piece with tempo. It is the classic lesson on rapid development and open lines.}
 1. e4 e5 2. Nf3 d6 {The Philidor Defence: solid, but a bit passive.}
 3. d4 Bg4 {Pins the knight, but it gives up the bishop pair after the exchange.}
-4. dxe5 Bxf3 {Black must give up the bishop, because 4...dxe5 5.Qxd8+ Kxd8 6.Nxe5 just wins a pawn.}
+4. dxe5 Bxf3 {Black must give up the bishop.} (4... dxe5 {Recapturing loses a pawn:} 5. Qxd8+ Kxd8 6. Nxe5 {White wins a pawn, and the knight now attacks both the g4-bishop and f7.})
 5. Qxf3 dxe5 6. Bc4 {Threatening Qxf7#. White is already well ahead in development.}
 6... Nf6 7. Qb3 {A double attack on f7 and b7.}
 7... Qe7 {Defends f7, but now the queen blocks the f8-bishop, so Black's kingside stays stuck.}
@@ -53,7 +53,7 @@ window.DEFAULT_GAMES = [
 15. Bxf4 Qf6 16. Nc3 Bc5 {Black attacks the rook on g1 and threatens ...Bxg1.}
 17. Nd5 {Development over material! The knight jumps in with a threat on the queen.}
 17... Qxb2 18. Bd6 {This offers both rooks. The bishop takes away e7 and f8 from the black king.}
-18... Bxg1 {18...Qxa1+ 19.Ke2 Qb2 was more stubborn, but Black's position is already very difficult.}
+18... Bxg1 {Taking the second rook. A more stubborn defence was 18...Qxa1+ first.} (18... Qxa1+ 19. Ke2 Qb2 {Black keeps the queen near the defence, but the position is still very difficult.})
 19. e5 {Shutting the queen off from the defence of g7.}
 19... Qxa1+ 20. Ke2 Na6 {Black is a queen's worth of material up, but has no defenders near the king.}
 21. Nxg7+ Kd8 22. Qf6+ {The final sacrifice. The queen pulls the knight away from g8.}
@@ -97,8 +97,7 @@ window.DEFAULT_GAMES = [
     pgn: `{13-year-old Bobby Fischer gives up his queen for a crushing attack and a mass of material. Hans Kmoch called it "The Game of the Century". Watch how Black's pieces work together after the sacrifice.}
 1. Nf3 Nf6 2. c4 g6 3. Nc3 Bg7 4. d4 O-O 5. Bf4 d5 6. Qb3 dxc4 7. Qxc4 c6 8. e4 Nbd7 9. Rd1 Nb6 10. Qc5 Bg4 {Black has finished developing while White's king is still in the centre.}
 11. Bg5 {White plays a natural developing move, but it is a mistake. 11.Be2 was safer.}
-11... Na4 {A brilliant shot. If 12.Nxa4 Nxe4, and White's position falls apart along the e-file.}
-12. Qa3 Nxc3 13. bxc3 Nxe4 {Black wins a pawn and opens the e-file against the uncastled king.}
+11... Na4 {A brilliant shot. The knight cannot be taken safely.} 12. Qa3 (12. Nxa4 Nxe4 {The knight attacks both the queen on c5 and the bishop on g5, and the e-file opens against White's king.}) 12... Nxc3 13. bxc3 Nxe4 {Black wins a pawn and opens the e-file against the uncastled king.}
 14. Bxe7 Qb6 15. Bc4 Nxc3 16. Bc5 Rfe8+ 17. Kf1 Be6 {The famous queen sacrifice. If White takes the queen, Black's minor pieces start a "windmill" of checks.}
 18. Bxb6 Bxc4+ 19. Kg1 Ne2+ 20. Kf1 Nxd4+ {A discovered check that picks up material while the king is driven back and forth.}
 21. Kg1 Ne2+ 22. Kf1 Nc3+ 23. Kg1 axb6 {Black has a rook, two bishops and a pawn for the queen, and White's position is in ruins.}

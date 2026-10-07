@@ -21,12 +21,12 @@ window.DEFAULT_GAMES = [
 8. Nc3 {Morphy keeps developing instead of grabbing the b7 pawn. Development first!}
 8... c6 9. Bg5 {Pins the f6-knight. Black's position is almost paralysed.}
 9... b5 {Trying to drive the bishop away and gain space, but it opens lines toward Black's own king.}
-10. Nxb5 {The first sacrifice. Lines matter more than material when the enemy king is still in the centre.}
+10. Nxb5! {The first sacrifice. Lines matter more than material when the enemy king is still in the centre.}
 10... cxb5 11. Bxb5+ Nbd7 12. O-O-O {Castling brings the rook to the open d-file with tempo on the pinned knight.}
 12... Rd8 13. Rxd7 {Removing a defender. White gives back material to keep the attack going.}
 13... Rxd7 14. Rd1 {Bringing up the last piece. Every white piece now takes part in the attack.}
 14... Qe6 {Black tries to unpin by offering a queen trade.}
-15. Bxd7+ Nxd7 16. Qb8+ {The famous queen sacrifice. It pulls the knight away from d7.}
+15. Bxd7+ Nxd7 16. Qb8+!! {The famous queen sacrifice. It pulls the knight away from d7.}
 16... Nxb8 17. Rd8# {Mate with only a rook and bishop left. A model of fast development, open lines and pins.}
 1-0`
   },
@@ -49,14 +49,14 @@ window.DEFAULT_GAMES = [
 9... c6 10. g4 {A pawn sacrifice that gains time against the h5-knight.}
 10... Nf6 11. Rg1 {Anderssen ignores the attacked bishop on b5 and gives it up to keep the initiative.}
 11... cxb5 12. h4 Qg6 13. h5 Qg5 14. Qf3 {Threatening Bxf4, which would trap the black queen.}
-14... Ng8 {A sad retreat. After 14 moves Black's only developed piece is the queen.}
+14... Ng8?! {A sad retreat. After 14 moves Black's only developed piece is the queen.}
 15. Bxf4 Qf6 16. Nc3 Bc5 {Black attacks the rook on g1 and threatens ...Bxg1.}
-17. Nd5 {Development over material! The knight jumps in with a threat on the queen.}
-17... Qxb2 18. Bd6 {This offers both rooks. The bishop takes away e7 and f8 from the black king.}
+17. Nd5! {Development over material! The knight jumps in with a threat on the queen.}
+17... Qxb2 18. Bd6!! {This offers both rooks. The bishop takes away e7 and f8 from the black king.}
 18... Bxg1 {Taking the second rook. A more stubborn defence was 18...Qxa1+ first.} (18... Qxa1+ 19. Ke2 Qb2 {Black keeps the queen near the defence, but the position is still very difficult.})
 19. e5 {Shutting the queen off from the defence of g7.}
 19... Qxa1+ 20. Ke2 Na6 {Black is a queen's worth of material up, but has no defenders near the king.}
-21. Nxg7+ Kd8 22. Qf6+ {The final sacrifice. The queen pulls the knight away from g8.}
+21. Nxg7+ Kd8 22. Qf6+!! {The final sacrifice. The queen pulls the knight away from g8.}
 22... Nxf6 23. Be7# {Mate by a bishop and two knights. White has given up two rooks, a bishop and the queen.}
 1-0`
   },
@@ -78,7 +78,7 @@ window.DEFAULT_GAMES = [
 12. Qxb5 Rb8 13. Qa4 Bb6 14. Nbd2 Bb7 15. Ne4 Qf5 16. Bxd3 Qh5 {Black threatens ...Qxf3 and mate on g2. White has to act quickly.}
 17. Nf6+ {Opening the g-file for Black too, but White's attack is faster.}
 17... gxf6 18. exf6 Rg8 {Black threatens ...Qxf3 and ...Rxg2+.}
-19. Rad1 {A calm move with a hidden point: the rook joins the attack on the d-file. One of the most famous quiet moves in chess.}
+19. Rad1!! {A calm move with a hidden point: the rook joins the attack on the d-file. One of the most famous quiet moves in chess.}
 19... Qxf3 20. Rxe7+ {This starts the combination.}
 20... Nxe7 21. Qxd7+ {A queen sacrifice that opens the d-file.}
 21... Kxd7 22. Bf5+ {Double check! The king must move.}
@@ -96,9 +96,9 @@ window.DEFAULT_GAMES = [
     tags: ['queen sacrifice', 'windmill', 'endgame technique'],
     pgn: `{13-year-old Bobby Fischer gives up his queen for a crushing attack and a mass of material. Hans Kmoch called it "The Game of the Century". Watch how Black's pieces work together after the sacrifice.}
 1. Nf3 Nf6 2. c4 g6 3. Nc3 Bg7 4. d4 O-O 5. Bf4 d5 6. Qb3 dxc4 7. Qxc4 c6 8. e4 Nbd7 9. Rd1 Nb6 10. Qc5 Bg4 {Black has finished developing while White's king is still in the centre.}
-11. Bg5 {White plays a natural developing move, but it is a mistake. 11.Be2 was safer.}
-11... Na4 {A brilliant shot. The knight cannot be taken safely.} 12. Qa3 (12. Nxa4 Nxe4 {The knight attacks both the queen on c5 and the bishop on g5, and the e-file opens against White's king.}) 12... Nxc3 13. bxc3 Nxe4 {Black wins a pawn and opens the e-file against the uncastled king.}
-14. Bxe7 Qb6 15. Bc4 Nxc3 16. Bc5 Rfe8+ 17. Kf1 Be6 {The famous queen sacrifice. If White takes the queen, Black's minor pieces start a "windmill" of checks.}
+11. Bg5? {White plays a natural developing move, but it is a mistake. 11.Be2 was safer.}
+11... Na4!! {A brilliant shot. The knight cannot be taken safely.} 12. Qa3 (12. Nxa4 Nxe4 {The knight attacks both the queen on c5 and the bishop on g5, and the e-file opens against White's king.}) 12... Nxc3 13. bxc3 Nxe4 {Black wins a pawn and opens the e-file against the uncastled king.}
+14. Bxe7 Qb6 15. Bc4 Nxc3 16. Bc5 Rfe8+ 17. Kf1 Be6!! {The famous queen sacrifice. If White takes the queen, Black's minor pieces start a "windmill" of checks.}
 18. Bxb6 Bxc4+ 19. Kg1 Ne2+ 20. Kf1 Nxd4+ {A discovered check that picks up material while the king is driven back and forth.}
 21. Kg1 Ne2+ 22. Kf1 Nc3+ 23. Kg1 axb6 {Black has a rook, two bishops and a pawn for the queen, and White's position is in ruins.}
 24. Qb4 Ra4 25. Qxb6 Nxd1 26. h3 Rxa2 27. Kh2 Nxf2 28. Re1 Rxe1 29. Qd8+ Bf8 30. Nxe1 Bd5 31. Nf3 Ne4 {Black's pieces now go after the white king.}
@@ -118,7 +118,7 @@ window.DEFAULT_GAMES = [
     pgn: `{"Kasparov's Immortal". A rook sacrifice on move 24 starts a king hunt that drags Black's king from b8 all the way to d1, deep inside White's camp.}
 1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Be3 Bg7 5. Qd2 c6 6. f3 b5 7. Nge2 Nbd7 8. Bh6 Bxh6 9. Qxh6 Bb7 10. a3 e5 11. O-O-O Qe7 12. Kb1 a6 13. Nc1 O-O-O {Both kings are now on the queenside. White's queen on h6 has nothing to attack on the kingside, so the fight moves to the centre and the queenside.}
 14. Nb3 exd4 15. Rxd4 c5 16. Rd1 Nb6 17. g3 Kb8 18. Na5 Ba8 19. Bh3 d5 20. Qf4+ Ka7 21. Rhe1 d4 22. Nd5 Nbxd5 23. exd5 Qd6 {Black blockades the d-pawn. It looks solid.}
-24. Rxd4 {One of the most famous sacrifices in chess. Kasparov saw the king hunt that follows many moves deep.}
+24. Rxd4!! {One of the most famous sacrifices in chess. Kasparov saw the king hunt that follows many moves deep.}
 24... cxd4 25. Re7+ Kb6 26. Qxd4+ Kxa5 27. b4+ Ka4 28. Qc3 {Threatening Qb3 mate. The black king is trapped among its own pieces.}
 28... Qxd5 29. Ra7 {A quiet rook move, aiming at the a8-bishop and the king's escape squares.}
 29... Bb7 30. Rxb7 Qc4 31. Qxf6 Kxa3 32. Qxa6+ Kxb4 33. c3+ {A pawn check that keeps driving the king forward.}

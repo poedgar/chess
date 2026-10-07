@@ -1,12 +1,18 @@
-// Minimal PGN reader/writer with comments and variations.
+// Minimal PGN reader/writer with comments, variations and annotations.
 // parsePgn() returns { headers, root } where root is a move tree:
-//   node = { san, comment, children: [node], parent }
+//   node = { san, comment, nags: [number], children: [node], parent }
 // The root holds no move; its comment is the game introduction. children[0]
 // is always the main continuation, further children are alternative moves.
 // buildTree() replays the tree with chess.js and adds from/to/fen/ply.
 (function (root) {
   const RESULTS = ['1-0', '0-1', '1/2-1/2', '*'];
-  const newNode = (san, parent) => ({ san, comment: '', children: [], parent });
+  // Numeric Annotation Glyphs: how good the move was / who stands better.
+  const MOVE_NAGS = { 3: '!!', 1: '!', 5: '!?', 6: '?!', 2: '?', 4: '??' };
+  const POS_NAGS = { 10: '=', 13: '∞', 14: '+=', 15: '=+', 16: '±', 17: '∓', 18: '+−', 19: '−+' };
+  const SUFFIX_NAGS = { '!!': 3, '!': 1, '!?': 5, '?!': 6, '?': 2, '??': 4 };
+  const SYMBOL_NAGS = { '=': 10, '∞': 13, '+=': 14, '⩲': 14, '=+': 15, '⩱': 15, '±': 16, '+/-': 16,
+    '∓': 17, '-/+': 17, '+-': 18, '+−': 18, '-+': 19, '−+': 19 };
+  const newNode = (san, parent) => ({ san, comment: '', nags: [], children: [], parent });
 
   function parsePgn(text) {
     const headers = {};
@@ -61,10 +67,16 @@
       let tok = text.slice(i, j);
       i = j;
       if (RESULTS.includes(tok)) { if (!stack.length) headers.Result = headers.Result || tok; continue; }
+      const addNag = (n) => { if (cur !== top && !varStart && !cur.nags.includes(n)) cur.nags.push(n); };
+      if (/^\$\d+$/.test(tok)) { addNag(Number(tok.slice(1))); continue; }
+      if (SYMBOL_NAGS[tok]) { addNag(SYMBOL_NAGS[tok]); continue; }
       tok = tok.replace(/^\d+\.+/, ''); // "12.e4" or "12..." prefix
+      const suffix = tok.match(/[!?]+$/);
       tok = tok.replace(/[!?]+$/, '').replace(/^0-0-0/, 'O-O-O').replace(/^0-0/, 'O-O');
-      if (!/^[KQRBNa-hO]/.test(tok)) continue; // move numbers, NAGs, annotation symbols
+      if (!tok && suffix && SUFFIX_NAGS[suffix[0]]) { addNag(SUFFIX_NAGS[suffix[0]]); continue; } // "e4 !"
+      if (!/^[KQRBNa-hO]/.test(tok)) continue; // move numbers, unknown symbols
       const node = newNode(tok, cur);
+      if (suffix && SUFFIX_NAGS[suffix[0]]) node.nags.push(SUFFIX_NAGS[suffix[0]]);
       if (preComment) { node.preComment = preComment; preComment = ''; }
       cur.children.push(node);
       cur = node;
@@ -102,8 +114,13 @@
 
   function toPgn(top, result) {
     const clean = (c) => c.replace(/[{}]/g, '');
+    // Move quality is written as a suffix ("Nxb5!"), other annotations as "$n".
+    const nagText = (n) => {
+      const q = n.nags.find((x) => MOVE_NAGS[x]);
+      return (q ? MOVE_NAGS[q] : '') + n.nags.filter((x) => x !== q).map((x) => ` $${x}`).join('');
+    };
     const moveText = (n, needNum) =>
-      n.ply % 2 ? `${Math.ceil(n.ply / 2)}. ${n.san}` : needNum ? `${n.ply / 2}... ${n.san}` : n.san;
+      (n.ply % 2 ? `${Math.ceil(n.ply / 2)}. ${n.san}` : needNum ? `${n.ply / 2}... ${n.san}` : n.san) + nagText(n);
 
     // Writes the continuation after `node`, with alternatives after each main move.
     const line = (node, needNum, out) => {
@@ -137,7 +154,7 @@
     return nodes;
   };
 
-  const api = { parsePgn, buildTree, toPgn, mainLine };
+  const api = { parsePgn, buildTree, toPgn, mainLine, MOVE_NAGS, POS_NAGS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PGN = api;
 })(this);

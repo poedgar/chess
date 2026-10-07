@@ -1,11 +1,20 @@
 (() => {
   const STORAGE_KEY = 'chess-classics-library-v1';
   const PREFS_KEY = 'chess-classics-prefs-v1';
+  const EVALS_KEY = 'chess-classics-evals-v1';
+  const LIVE_DEPTH = 20;    // live analysis of the current position
+  const ANALYZE_DEPTH = 16; // per position when analysing a whole game
   const GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
   const FILES = 'abcdefgh';
   const icon = (d) => `<svg viewBox="0 0 24 24" class="w-5 h-5 mx-auto" fill="currentColor">${d}</svg>`;
   const PLAY_ICON = icon('<path d="M7 5v14l11-7z"/>');
   const PAUSE_ICON = icon('<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>');
+  const { MOVE_NAGS, POS_NAGS } = PGN;
+  const MOVE_NAG_ORDER = [3, 1, 5, 6, 2, 4];
+  const POS_NAG_ORDER = [10, 13, 14, 15, 16, 17, 18, 19];
+  const NAG_LABELS = { 3: 'Brilliant', 1: 'Good move', 5: 'Interesting', 6: 'Inaccuracy', 2: 'Mistake', 4: 'Blunder',
+    10: 'Equal', 13: 'Unclear', 14: 'White is slightly better', 15: 'Black is slightly better',
+    16: 'White is better', 17: 'Black is better', 18: 'White is winning', 19: 'Black is winning' };
 
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, cls, text) => {
@@ -27,7 +36,7 @@
   };
 
   let library = store.get(STORAGE_KEY, null) || structuredClone(window.DEFAULT_GAMES);
-  const prefs = Object.assign({ lastId: null, quizSide: 'w' }, store.get(PREFS_KEY, {}));
+  const prefs = Object.assign({ lastId: null, quizSide: 'w', engine: false }, store.get(PREFS_KEY, {}));
   const saveLibrary = () => store.set(STORAGE_KEY, library);
   const savePrefs = () => store.set(PREFS_KEY, prefs);
 
@@ -47,7 +56,14 @@
     hinted: false,
     score: { right: 0, tries: 0 },
     timer: null,      // quiz: pending opponent reply
-    promo: null       // pending promotion { from, to }
+    promo: null,      // pending promotion { from, to }
+    // Engine evaluations by position, always from White's point of view:
+    // fenKey -> { score: { cp } | { mate }, depth, pv: [uci] }
+    evals: new Map(Object.entries(store.get(EVALS_KEY, {}))),
+    live: null,       // { node, score, depth, pv } shown in the engine panel
+    engineState: 'off', // off | loading | ready | error
+    analyzing: false,
+    analyzeMsg: ''
   };
   let nextId = 1;
 
@@ -61,6 +77,9 @@
   function loadGame(id) {
     stopAutoplay();
     clearTimeout(S.timer);
+    if (S.analyzing) { S.analyzing = false; Engine.stop(); }
+    S.analyzeMsg = '';
+    S.live = null;
     const game = library.find((g) => g.id === id) || library[0];
     let root = emptyTree();
     if (game) {
@@ -99,6 +118,104 @@
     return n;
   };
   const moveLabel = (n) => `${Math.ceil(n.ply / 2)}${n.ply % 2 ? '.' : '...'} ${n.san}`;
+  const qualityNag = (n) => n.nags && n.nags.find((x) => MOVE_NAGS[x]);
+  const posNag = (n) => n.nags && n.nags.find((x) => POS_NAGS[x]);
+
+  // ---------- evaluations ----------
+  const fenKey = (fen) => fen.split(' ').slice(0, 4).join(' ');
+
+  // Finished positions are scored directly, without asking the engine.
+  function terminal(node) {
+    if (!('term' in node)) {
+      const c = new Chess(node.fen);
+      node.term = c.in_checkmate() ? { score: { mate: 0, winner: c.turn() === 'w' ? 'b' : 'w' }, depth: 99, pv: [] }
+        : c.game_over() ? { score: { cp: 0 }, depth: 99, pv: [] } : null;
+    }
+    return node.term;
+  }
+  const evalOf = (node) => terminal(node) || S.evals.get(fenKey(node.fen)) || null;
+
+  // White's winning chances in [-1, 1] (the curve lichess uses).
+  const winChance = (s) => s.mate !== undefined
+    ? (s.mate === 0 ? (s.winner === 'w' ? 1 : -1) : Math.sign(s.mate))
+    : 2 / (1 + Math.exp(-0.00368208 * s.cp)) - 1;
+  const fmtScore = (s) => s.mate !== undefined
+    ? (s.mate === 0 ? (s.winner === 'w' ? '1-0' : '0-1') : `${s.mate > 0 ? '+' : '−'}M${Math.abs(s.mate)}`)
+    : `${s.cp >= 0 ? '+' : '−'}${(Math.abs(s.cp) / 100).toFixed(1)}`;
+
+  // Engine scores are from the side to move; store them from White's side.
+  function fromEngine(info, fen) {
+    const sign = fen.split(' ')[1] === 'b' ? -1 : 1;
+    const score = info.score.mate !== undefined ? { mate: info.score.mate * sign } : { cp: info.score.cp * sign };
+    return { score, depth: info.depth, pv: info.pv.slice(0, 12) };
+  }
+
+  let evalsSaveTimer = null;
+  function storeEval(fen, e) {
+    const key = fenKey(fen);
+    const old = S.evals.get(key);
+    if (old && old.depth > e.depth) return;
+    S.evals.set(key, e);
+    clearTimeout(evalsSaveTimer);
+    evalsSaveTimer = setTimeout(() => store.set(EVALS_KEY, Object.fromEntries(S.evals)), 1000);
+  }
+
+  function uciToSan(fen, uci) {
+    const m = new Chess(fen).move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    return m ? m.san : uci;
+  }
+
+  function pvText(node, pv, max) {
+    const c = new Chess(node.fen);
+    const out = [];
+    let ply = node.ply;
+    for (const uci of pv.slice(0, max)) {
+      const m = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      if (!m) break;
+      ply++;
+      out.push(ply % 2 ? `${Math.ceil(ply / 2)}. ${m.san}` : out.length ? m.san : `${ply / 2}... ${m.san}`);
+    }
+    return out.join(' ');
+  }
+
+  // How much the move changed the mover's winning chances, judged by the engine.
+  function engineVerdict(node) {
+    if (!node.parent) return null;
+    const before = evalOf(node.parent);
+    const after = evalOf(node);
+    if (!before || !after) return null;
+    const mover = node.ply % 2 ? 1 : -1;
+    const loss = mover * (winChance(before.score) - winChance(after.score));
+    const best = before.pv && before.pv[0];
+    const playedBest = best && best.slice(0, 4) === node.from + node.to;
+    let nag = null;
+    if (!playedBest) nag = loss >= 0.3 ? 4 : loss >= 0.2 ? 2 : loss >= 0.1 ? 6 : null;
+    return { before, after, nag, best: playedBest ? null : best };
+  }
+
+  // The mark shown for a move: your own annotation wins over the engine's.
+  function markOf(node) {
+    const q = qualityNag(node);
+    if (q) return { nag: q, engine: false };
+    if (S.mode !== 'replay') return null;
+    const v = engineVerdict(node);
+    return v && v.nag ? { nag: v.nag, engine: true } : null;
+  }
+
+  function appendNags(target, node) {
+    const mark = markOf(node);
+    if (mark) {
+      const n = el('span', `nag q-${mark.nag}${mark.engine ? ' engine' : ''}`, MOVE_NAGS[mark.nag]);
+      n.title = `${mark.engine ? 'Engine: ' : ''}${NAG_LABELS[mark.nag]}`;
+      target.appendChild(n);
+    }
+    const p = posNag(node);
+    if (p) {
+      const n = el('span', 'nag pos', POS_NAGS[p]);
+      n.title = NAG_LABELS[p];
+      target.appendChild(n);
+    }
+  }
 
   // ---------- rendering ----------
   function render() {
@@ -108,6 +225,9 @@
     renderMoves();
     renderVarBar();
     renderQuiz();
+    renderEngine();
+    renderEvalGraph();
+    requestLive();
   }
 
   function renderBoard() {
@@ -140,6 +260,10 @@
       if (S.wrong && S.wrong.includes(sq)) cell.classList.add('wrong');
       if (targets.includes(sq)) cell.classList.add('target', piece ? 'occupied' : 'empty');
       if (piece) cell.appendChild(el('span', `piece ${piece.color}`, GLYPHS[piece.type] + '︎'));
+      if (sq === node.to) {
+        const mark = markOf(node);
+        if (mark) cell.appendChild(el('span', `badge q-${mark.nag}`, MOVE_NAGS[mark.nag]));
+      }
       if (i >= 56) cell.appendChild(el('span', 'coord file', FILES[f]));
       if (i % 8 === 0) cell.appendChild(el('span', 'coord rank', String(8 - r)));
       board.appendChild(cell);
@@ -180,7 +304,16 @@
   function renderNote() {
     const node = S.node;
     const main = isMain(node);
-    $('#note-title').textContent = node === S.root ? 'Introduction' : moveLabel(node) + (main ? '' : '  (alternative)');
+    const titleEl = $('#note-title');
+    titleEl.textContent = node === S.root ? 'Introduction' : moveLabel(node);
+    if (node !== S.root) {
+      appendNags(titleEl, node);
+      const mark = markOf(node);
+      const label = [mark && !mark.engine ? NAG_LABELS[mark.nag] : '', main ? '' : 'alternative'].filter(Boolean).join(' · ');
+      if (label) titleEl.appendChild(el('span', 'ml-2 text-xs font-normal text-slate-400', label));
+    }
+    renderVerdict();
+    renderNagEditor();
     const p = $('#note-text');
     if (node.comment) {
       p.textContent = node.comment;
@@ -207,8 +340,59 @@
     })));
   }
 
+  function renderVerdict() {
+    const p = $('#engine-verdict');
+    const v = S.mode === 'replay' && S.node.parent ? engineVerdict(S.node) : null;
+    p.classList.toggle('hidden', !v);
+    if (!v) return;
+    p.replaceChildren(el('span', 'text-slate-400', `Engine: ${fmtScore(v.before.score)} → ${fmtScore(v.after.score)}`));
+    if (v.nag) {
+      p.appendChild(el('span', `nag q-${v.nag} ml-2`, `${MOVE_NAGS[v.nag]} ${NAG_LABELS[v.nag]}`));
+      if (v.best) {
+        const ply = S.node.ply;
+        const best = `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'} ${uciToSan(S.node.parent.fen, v.best)}`;
+        const b = el('button', 'ml-2 text-sky-300 hover:underline', `Best was ${best}`);
+        b.title = 'Show the better move on the board';
+        b.addEventListener('click', () => {
+          goTo(S.node.parent);
+          playMove({ from: v.best.slice(0, 2), to: v.best.slice(2, 4), promotion: v.best[4] });
+        });
+        p.appendChild(b);
+      }
+    }
+  }
+
+  function renderNagEditor() {
+    const node = S.node;
+    const show = !!S.game && node !== S.root && S.mode === 'replay';
+    $('#nag-editor').classList.toggle('hidden', !show);
+    if (!show) return;
+    const chip = (n, glyphs) => {
+      const b = el('button', `nag-btn${MOVE_NAGS[n] ? ` q-${n}` : ''}${node.nags.includes(n) ? ' on' : ''}`, glyphs[n]);
+      b.title = NAG_LABELS[n];
+      b.addEventListener('click', () => toggleNag(n));
+      return b;
+    };
+    $('#nag-move').replaceChildren(...MOVE_NAG_ORDER.map((n) => chip(n, MOVE_NAGS)));
+    $('#nag-pos').replaceChildren(...POS_NAG_ORDER.map((n) => chip(n, POS_NAGS)));
+  }
+
+  // One move-quality mark and one position mark per move; clicking again clears it.
+  function toggleNag(n) {
+    const node = S.node;
+    const group = MOVE_NAGS[n] ? MOVE_NAGS : POS_NAGS;
+    const had = node.nags.includes(n);
+    node.nags = node.nags.filter((x) => !group[x]);
+    if (!had) node.nags.push(n);
+    saveTree();
+    renderBoard();
+    renderNote();
+    renderMoves();
+  }
+
   function moveSpan(node, text) {
     const span = el('span', 'mv', text);
+    appendNags(span, node);
     if (node.comment) { span.classList.add('has-note'); span.title = node.comment; }
     if (node === S.node) span.classList.add('cur');
     span.dataset.id = node.id;
@@ -397,7 +581,7 @@
     const existing = S.node.children.find((c) => c.san === mv.san);
     if (existing) return goTo(existing);
     const node = { san: mv.san, from: mv.from, to: mv.to, fen: chess.fen(), ply: S.node.ply + 1,
-      comment: '', children: [], parent: S.node };
+      comment: '', nags: [], children: [], parent: S.node };
     S.node.children.push(node);
     index(node);
     saveTree();
@@ -416,6 +600,225 @@
     drop(node);
     saveTree();
     goTo(parent);
+  }
+
+  // ---------- engine ----------
+  function enableEngine(on) {
+    prefs.engine = on;
+    savePrefs();
+    if (!on) {
+      clearTimeout(liveTimer);
+      if (!S.analyzing) Engine.stop();
+      S.live = null;
+      renderEngine();
+      return;
+    }
+    if (S.engineState === 'ready') return requestLive();
+    S.engineState = 'loading';
+    renderEngine();
+    Engine.start().then(
+      () => { S.engineState = 'ready'; requestLive(); },
+      () => { S.engineState = 'error'; renderEngine(); });
+  }
+
+  let liveTimer = null;
+  function requestLive() {
+    clearTimeout(liveTimer);
+    if (!prefs.engine || S.mode !== 'replay' || S.analyzing || !S.game) {
+      if (!S.analyzing && S.engineState === 'ready') Engine.stop();
+      return;
+    }
+    const node = S.node;
+    const known = evalOf(node);
+    S.live = { node, ...(known || {}) };
+    renderEngine();
+    if (S.engineState !== 'ready' || (known && known.depth >= LIVE_DEPTH)) { Engine.stop(); return; }
+    // A short delay so stepping quickly through moves doesn't start a search per move.
+    liveTimer = setTimeout(() => {
+      Engine.analyse(node.fen, {
+        depth: LIVE_DEPTH,
+        onInfo: (info) => {
+          if (S.node !== node || info.depth < (known ? known.depth : 1)) return;
+          S.live = { node, ...fromEngine(info, node.fen) };
+          renderEngine();
+        }
+      }).then((info) => {
+        if (!info) return;
+        storeEval(node.fen, fromEngine(info, node.fen));
+        if (S.node === node || S.node.parent === node) refreshEvalViews();
+      }, () => { S.engineState = 'error'; renderEngine(); });
+    }, 150);
+  }
+
+  // Redraws everything that shows evaluations, without restarting the engine.
+  function refreshEvalViews() {
+    renderBoard();
+    renderNote();
+    renderMoves();
+    renderEngine();
+    renderEvalGraph();
+  }
+
+  function renderEngine() {
+    const quiz = S.mode === 'quiz';
+    $('#engine-card').classList.toggle('hidden', quiz || !S.game);
+    $('#engine-toggle').checked = prefs.engine;
+    const on = prefs.engine && !quiz && !!S.game;
+    const live = on && S.live && S.live.node === S.node ? S.live : null;
+
+    let score = '';
+    let detail = 'Turn on to see the evaluation and the best move.';
+    if (on) {
+      if (S.engineState === 'loading') detail = 'Loading Stockfish…';
+      else if (S.engineState === 'error') detail = 'Engine unavailable. It loads from the internet, so check your connection.';
+      else if (live && live.score) {
+        score = fmtScore(live.score);
+        detail = live.depth === 99 ? 'Game over' : `depth ${live.depth}`;
+      } else detail = S.analyzing ? 'Analysing the game…' : 'Thinking…';
+    }
+    $('#engine-score').textContent = score;
+    $('#engine-depth').textContent = detail;
+
+    $('#eval-bar').classList.toggle('hidden', !on);
+    const fill = $('#eval-fill');
+    fill.style.height = `${50 + 50 * (live && live.score ? winChance(live.score) : 0)}%`;
+    fill.style.top = S.orientation === 'w' ? 'auto' : '0';
+    fill.style.bottom = S.orientation === 'w' ? '0' : 'auto';
+
+    const pv = live && live.pv && live.pv.length ? live.pv : null;
+    $('#engine-line').classList.toggle('hidden', !pv);
+    $('#engine-pv').textContent = pv ? pvText(S.node, pv, 8) : '';
+    drawArrow(pv ? pv[0] : null);
+
+    $('#btn-analyze').textContent = S.analyzing ? 'Stop' : 'Analyze game';
+    $('#analyze-status').classList.toggle('hidden', !S.analyzeMsg);
+    $('#analyze-status').textContent = S.analyzeMsg;
+  }
+
+  function drawArrow(uci) {
+    const layer = $('#arrow-layer');
+    if (!uci) { layer.innerHTML = ''; return; }
+    const xy = (sq) => {
+      const f = FILES.indexOf(sq[0]);
+      const r = Number(sq[1]) - 1;
+      return S.orientation === 'w' ? [f + 0.5, 7.5 - r] : [7.5 - f, r + 0.5];
+    };
+    const [x1, y1] = xy(uci.slice(0, 2));
+    const [x2, y2] = xy(uci.slice(2, 4));
+    const color = 'rgba(56,189,248,.85)';
+    layer.innerHTML = `<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker></defs>
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="0.16" stroke-linecap="round" marker-end="url(#arrowhead)"/>`;
+  }
+
+  async function analyzeGame() {
+    if (S.analyzing) { S.analyzing = false; Engine.stop(); return; }
+    const game = S.game;
+    if (!game) return;
+    const positions = [S.root, ...mainLine()];
+    S.analyzing = true;
+    clearTimeout(liveTimer);
+    S.analyzeMsg = 'Loading Stockfish…';
+    renderEngine();
+    try { await Engine.start(); }
+    catch {
+      S.analyzing = false;
+      S.analyzeMsg = 'Engine unavailable. It loads from the internet, so check your connection.';
+      return renderEngine();
+    }
+    for (let i = 0; i < positions.length && S.analyzing && S.game === game; i++) {
+      const node = positions[i];
+      S.analyzeMsg = `Analysing position ${i + 1} of ${positions.length}…`;
+      renderEngine();
+      const known = evalOf(node);
+      if (known && known.depth >= ANALYZE_DEPTH) continue;
+      const info = await Engine.analyse(node.fen, { depth: ANALYZE_DEPTH });
+      if (!info) break; // stopped
+      storeEval(node.fen, fromEngine(info, node.fen));
+      renderEvalGraph();
+      if (i % 5 === 0) renderMoves();
+    }
+    if (S.game !== game) return; // another game was opened meanwhile
+    const finished = S.analyzing;
+    S.analyzing = false;
+    S.analyzeMsg = finished ? analysisSummary() : 'Analysis stopped.';
+    render();
+  }
+
+  function analysisSummary() {
+    const counts = { w: { 6: 0, 2: 0, 4: 0 }, b: { 6: 0, 2: 0, 4: 0 } };
+    mainLine().forEach((n) => {
+      const v = engineVerdict(n);
+      if (v && v.nag) counts[n.ply % 2 ? 'w' : 'b'][v.nag]++;
+    });
+    const side = (c) => `${c[6]} inaccurac${c[6] === 1 ? 'y' : 'ies'}, ${c[2]} mistake${c[2] === 1 ? '' : 's'}, ${c[4]} blunder${c[4] === 1 ? '' : 's'}`;
+    return `Engine check done. White: ${side(counts.w)}. Black: ${side(counts.b)}. Marks with lighter colour in the move list come from the engine.`;
+  }
+
+  // ---------- evaluation graph ----------
+  let graphLine = [];
+  function renderEvalGraph() {
+    const wrap = $('#eval-graph');
+    const line = S.game ? [S.root, ...mainLine()] : [];
+    const pts = line.map((n, i) => { const e = evalOf(n); return e ? { i, n, w: winChance(e.score) } : null; }).filter(Boolean);
+    const show = S.mode === 'replay' && pts.length >= 2;
+    wrap.classList.toggle('hidden', !show);
+    graphLine = show ? line : [];
+    if (!show) return;
+    const svg = $('#eval-svg');
+    const W = svg.clientWidth || 500;
+    const H = svg.clientHeight || 96;
+    const N = Math.max(1, line.length - 1);
+    const x = (i) => 4 + (i / N) * (W - 8);
+    const y = (w) => H / 2 - w * (H / 2 - 6);
+    const curve = pts.map((p) => `${x(p.i).toFixed(1)},${y(p.w).toFixed(1)}`).join(' L');
+    const area = `M${x(pts[0].i).toFixed(1)},${H} L${curve} L${x(pts[pts.length - 1].i).toFixed(1)},${H} Z`;
+    const cur = line.indexOf(mainAncestor(S.node));
+    const markers = pts.filter((p) => p.i > 0).map((p) => {
+      const v = engineVerdict(p.n);
+      return v && (v.nag === 2 || v.nag === 4)
+        ? `<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.w).toFixed(1)}" r="4.5" class="q-${v.nag}" style="fill:var(--q)" stroke="#0f172a" stroke-width="2"/>`
+        : '';
+    }).join('');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = `<rect width="${W}" height="${H}" fill="#0f172a"/>
+      <path d="${area}" fill="#e2e8f0" fill-opacity=".88"/>
+      <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="#64748b" stroke-width="1" stroke-dasharray="3 3"/>
+      ${cur >= 0 ? `<line x1="${x(cur)}" x2="${x(cur)}" y1="0" y2="${H}" stroke="#f59e0b" stroke-width="2"/>` : ''}
+      <line id="eval-cross" x1="0" x2="0" y1="0" y2="${H}" stroke="#94a3b8" stroke-width="1" visibility="hidden"/>
+      ${markers}`;
+  }
+
+  function graphIndex(e) {
+    const svg = $('#eval-svg');
+    const rect = svg.getBoundingClientRect();
+    const N = Math.max(1, graphLine.length - 1);
+    const i = Math.round(((e.clientX - rect.left - 4) / (rect.width - 8)) * N);
+    return { i: Math.max(0, Math.min(N, i)), rect, N };
+  }
+
+  function onGraphHover(e) {
+    if (!graphLine.length) return;
+    const { i, rect, N } = graphIndex(e);
+    const node = graphLine[i];
+    const ev = evalOf(node);
+    const v = engineVerdict(node);
+    const tip = $('#eval-tip');
+    tip.textContent = `${i === 0 ? 'Start' : moveLabel(node)}   ${ev ? fmtScore(ev.score) : 'not analysed'}${v && v.nag ? `   ${MOVE_NAGS[v.nag]} ${NAG_LABELS[v.nag]}` : ''}`;
+    tip.classList.remove('hidden');
+    const px = 4 + (i / N) * (rect.width - 8);
+    const left = Math.max(0, Math.min(rect.width - tip.offsetWidth, px - tip.offsetWidth / 2));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${$('#eval-svg').offsetTop - tip.offsetHeight - 4}px`;
+    const cross = $('#eval-cross');
+    cross.setAttribute('x1', px); cross.setAttribute('x2', px);
+    cross.setAttribute('visibility', 'visible');
+  }
+
+  function hideGraphHover() {
+    $('#eval-tip').classList.add('hidden');
+    const cross = $('#eval-cross');
+    if (cross) cross.setAttribute('visibility', 'hidden');
   }
 
   // ---------- guess-the-move mode ----------
@@ -642,18 +1045,25 @@
 
   function restoreDefaults() {
     const missing = window.DEFAULT_GAMES.filter((d) => !library.some((g) => g.id === d.id));
-    if (!missing.length) return alert('All built-in games are already in your library.');
+    const changed = window.DEFAULT_GAMES.filter((d) => library.some((g) => g.id === d.id && g.pgn !== d.pgn));
     library.push(...structuredClone(missing));
+    let updated = 0;
+    if (changed.length && confirm(`${changed.length} built-in game(s) differ from the latest built-in version, either because you edited them or because the app was updated.\n\nReplace them with the latest version? Your own notes, marks and lines in those games will be lost.`)) {
+      changed.forEach((d) => { library[library.findIndex((g) => g.id === d.id)] = structuredClone(d); });
+      updated = changed.length;
+    }
+    if (!missing.length && !updated) return alert('Nothing to restore.');
     saveLibrary();
     renderLibrary();
-    alert(`Restored ${missing.length} built-in game(s).`);
+    if (S.game && changed.some((d) => d.id === S.game.id) && updated) loadGame(S.game.id);
+    alert(`Restored ${missing.length} and updated ${updated} built-in game(s).`);
   }
 
   // ---------- wiring ----------
   document.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => { stopAutoplay(); nav[b.dataset.nav](); }));
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
   $('#btn-play').addEventListener('click', toggleAutoplay);
-  $('#btn-flip').addEventListener('click', () => { S.orientation = S.orientation === 'w' ? 'b' : 'w'; renderBoard(); });
+  $('#btn-flip').addEventListener('click', () => { S.orientation = S.orientation === 'w' ? 'b' : 'w'; renderBoard(); renderEngine(); });
   $('#board').addEventListener('click', onBoardClick);
   $('#promo').addEventListener('click', (e) => { if (e.target.id === 'promo') { hidePromo(); renderBoard(); } });
   $('#moves').addEventListener('click', (e) => {
@@ -682,6 +1092,19 @@
     savePrefs();
     setMode('quiz');
   });
+  $('#engine-toggle').addEventListener('change', (e) => enableEngine(e.target.checked));
+  $('#btn-analyze').addEventListener('click', analyzeGame);
+  $('#btn-play-best').addEventListener('click', () => {
+    const best = S.live && S.live.node === S.node && S.live.pv && S.live.pv[0];
+    if (best) playMove({ from: best.slice(0, 2), to: best.slice(2, 4), promotion: best[4] });
+  });
+  $('#eval-svg').addEventListener('mousemove', onGraphHover);
+  $('#eval-svg').addEventListener('mouseleave', hideGraphHover);
+  $('#eval-svg').addEventListener('click', (e) => {
+    if (graphLine.length) { stopAutoplay(); goTo(graphLine[graphIndex(e).i]); }
+  });
+  let resizeTimer = null;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderEvalGraph, 100); });
   $('#btn-export').addEventListener('click', exportLibrary);
   $('#btn-restore').addEventListener('click', restoreDefaults);
   $('#file-import').addEventListener('change', (e) => {
@@ -701,4 +1124,5 @@
   $('#quiz-side').value = prefs.quizSide;
   setMode('replay');
   loadGame(prefs.lastId);
+  if (prefs.engine) enableEngine(true);
 })();

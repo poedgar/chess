@@ -4,6 +4,8 @@
 // only that move counts, without asking the engine about alternatives) or is a
 // multiple-choice question (`options`, the first one is correct; the order is
 // shuffled when shown). `move` is shown on the board after a choice is answered.
+// "Play the answer" replays the game from the quiz position for `plies` half-moves
+// (default 4, never past the end of the game).
 window.QUIZ_CATEGORIES = [
   ['opening', 'Beginnings'],
   ['strategy', 'Strategy'],
@@ -69,7 +71,7 @@ window.QUIZZES = [
     explain: "With the king still on e1, White should castle first. After 11.Bg5? Fischer's 11...Na4!! exploits the uncastled king and the loose queen on c5."
   },
   {
-    id: 'deepblue-nxe6', cat: 'opening', game: 'deep-blue-kasparov', at: '8.', solution: 'Nxe6',
+    id: 'deepblue-nxe6', cat: 'opening', game: 'deep-blue-kasparov', at: '8.', plies: 6, solution: 'Nxe6',
     q: '7...h6 is a known mistake in this Caro-Kann line. Punish it the way Deep Blue did.',
     explain: '8.Nxe6! gives a knight to keep Black\'s king stuck in the centre. After 8...Qe7 9.O-O fxe6 10.Bg6+ Kd8 the king can never castle.'
   },
@@ -113,7 +115,7 @@ window.QUIZZES = [
     explain: '11.Ba3 eyes e7 and f8. Black\'s king can no longer escape to g8 safely and stays in the centre.'
   },
   {
-    id: 'evergreen-rad1', cat: 'strategy', game: 'evergreen-game', at: '19.', solution: 'Rad1',
+    id: 'evergreen-rad1', cat: 'strategy', game: 'evergreen-game', at: '19.', plies: 11, solution: 'Rad1',
     q: 'Black threatens ...Qxf3 and ...Rxg2+. Anderssen found a famous quiet move that brings his last piece into play. Find it.',
     explain: '19.Rad1!! adds the rook to the d-file. When Black grabs on f3, the combination 20.Rxe7+ Nxe7 21.Qxd7+!! Kxd7 22.Bf5+ follows.'
   },
@@ -140,54 +142,54 @@ window.QUIZZES = [
     explain: 'With the king on a4, every square matters. Ra7 attacks the bishop and controls the a-file, so the king hunt can continue.'
   },
   {
-    id: 'lasker-rf3', cat: 'strategy', game: 'lasker-bauer', at: '19.', solution: 'Rf3',
+    id: 'lasker-rf3', cat: 'strategy', game: 'lasker-bauer', at: '19.', plies: 7, solution: 'Rf3',
     q: 'Black\'s king has lost its pawn shield. Bring the rook into the attack along the third rank.',
     explain: '19.Rf3 is a classic rook lift. It threatens Rh3+ and mate, so Black has to give up the queen.'
   },
 
   // ---------- tactics ----------
   {
-    id: 'opera-nxb5', cat: 'tactics', game: 'opera-game', at: '10.', solution: 'Nxb5',
+    id: 'opera-nxb5', cat: 'tactics', game: 'opera-game', at: '10.', plies: 7, solution: 'Nxb5',
     q: 'Black\'s last move ...b5 opened lines near the king. Find the sacrifice that rips them open.',
     explain: '10.Nxb5! gives a knight for two pawns. With Black\'s king in the centre, open lines are worth more than material.'
   },
   {
-    id: 'immortal-bd6', cat: 'tactics', game: 'immortal-game', at: '18.', solution: 'Bd6',
+    id: 'immortal-bd6', cat: 'tactics', game: 'immortal-game', at: '18.', plies: 11, solution: 'Bd6',
     q: 'Find the stunning bishop move that offers both rooks.',
     explain: '18.Bd6!! takes e7 and f8 away from the black king and blocks the d-pawn. Black can grab both rooks, but White\'s pieces are all aimed at the king.'
   },
   {
-    id: 'evergreen-rxe7', cat: 'tactics', game: 'evergreen-game', at: '20.', solution: 'Rxe7+',
+    id: 'evergreen-rxe7', cat: 'tactics', game: 'evergreen-game', at: '20.', plies: 9, solution: 'Rxe7+',
     q: 'Black has just taken on f3 and threatens mate on g2. Start the combination with a check.',
     explain: '20.Rxe7+ Nxe7 21.Qxd7+!! Kxd7 22.Bf5+ (double check) Ke8 23.Bd7+ Kf8 24.Bxe7#.'
   },
   {
-    id: 'fischer-na4', cat: 'tactics', game: 'game-of-the-century', at: '11...', solution: 'Na4',
+    id: 'fischer-na4', cat: 'tactics', game: 'game-of-the-century', at: '11...', plies: 5, solution: 'Na4',
     q: 'White\'s queen on c5 and king on e1 are loose. Find Fischer\'s brilliant knight move.',
     explain: '11...Na4!! If 12.Nxa4 Nxe4, the knight attacks the queen and the g5-bishop and opens the e-file. The c3-knight was guarding e4.'
   },
   {
-    id: 'fischer-be6', cat: 'tactics', game: 'game-of-the-century', at: '17...', solution: 'Be6',
+    id: 'fischer-be6', cat: 'tactics', game: 'game-of-the-century', at: '17...', plies: 13, solution: 'Be6',
     q: 'Black\'s queen is attacked. Fischer did not move it. Find his move.',
     explain: '17...Be6!! After 18.Bxb6 Bxc4+ the "windmill" of discovered checks with the knight collects a mass of material.'
   },
   {
-    id: 'reti-qd8', cat: 'tactics', game: 'reti-tartakower', at: '9.', solution: 'Qd8+',
+    id: 'reti-qd8', cat: 'tactics', game: 'reti-tartakower', at: '9.', plies: 5, solution: 'Qd8+',
     q: 'Black just took the knight on e4. Punish it with a queen sacrifice.',
     explain: '9.Qd8+!! Kxd8 10.Bg5+ is a double check from the bishop and the d1-rook, and mate follows on the next move.'
   },
   {
-    id: 'kasparov-rxd4', cat: 'tactics', game: 'kasparov-immortal', at: '24.', solution: 'Rxd4',
+    id: 'kasparov-rxd4', cat: 'tactics', game: 'kasparov-immortal', at: '24.', plies: 9, solution: 'Rxd4',
     q: 'Black has blockaded the d-pawn and looks solid. Find the rook sacrifice that starts a king hunt.',
     explain: '24.Rxd4!! cxd4 25.Re7+ drives the king out: 25...Kb6 26.Qxd4+ Kxa5 27.b4+ Ka4 28.Qc3 and the king is trapped.'
   },
   {
-    id: 'lasker-nh5', cat: 'tactics', game: 'lasker-bauer', at: '14.', solution: 'Nh5',
+    id: 'lasker-nh5', cat: 'tactics', game: 'lasker-bauer', at: '14.', plies: 7, solution: 'Nh5',
     q: 'The f6-knight is the key defender of h7. Remove it.',
     explain: '14.Nh5 offers a trade of the defender. After 14...Nxh5 the h7-pawn is ready for the first bishop sacrifice.'
   },
   {
-    id: 'lasker-bxh7', cat: 'tactics', game: 'lasker-bauer', at: '15.', solution: 'Bxh7+',
+    id: 'lasker-bxh7', cat: 'tactics', game: 'lasker-bauer', at: '15.', plies: 5, solution: 'Bxh7+',
     q: 'The defender is gone. Start the double bishop sacrifice.',
     explain: '15.Bxh7+! Kxh7 16.Qxh5+ Kg8 17.Bxg7! and the second bishop strips the king completely.'
   },
@@ -199,22 +201,22 @@ window.QUIZZES = [
 
   // ---------- endings ----------
   {
-    id: 'opera-mate', cat: 'endgame', game: 'opera-game', at: '16.', solution: 'Qb8+',
+    id: 'opera-mate', cat: 'endgame', game: 'opera-game', at: '16.', plies: 3, solution: 'Qb8+',
     q: 'Mate in 2. The d7-knight is the only defender of d8.',
     explain: '16.Qb8+!! Nxb8 17.Rd8#. The queen sacrifice pulls the knight away, and rook and bishop deliver mate.'
   },
   {
-    id: 'immortal-mate', cat: 'endgame', game: 'immortal-game', at: '22.', solution: 'Qf6+',
+    id: 'immortal-mate', cat: 'endgame', game: 'immortal-game', at: '22.', plies: 3, solution: 'Qf6+',
     q: 'Mate in 2. White has only a queen and three minor pieces left. Use them.',
     explain: '22.Qf6+!! Nxf6 23.Be7#. Mate with a bishop and two knights after giving up both rooks, a bishop and the queen.'
   },
   {
-    id: 'evergreen-mate', cat: 'endgame', game: 'evergreen-game', at: '22.', solution: 'Bf5+',
+    id: 'evergreen-mate', cat: 'endgame', game: 'evergreen-game', at: '22.', plies: 5, solution: 'Bf5+',
     q: 'Mate in 3. Start with a double check.',
     explain: '22.Bf5+ (double check from the bishop and the d1-rook) Ke8 23.Bd7+ Kf8 24.Bxe7#. If 22...Kc6, then 23.Bd7#.'
   },
   {
-    id: 'reti-mate', cat: 'endgame', game: 'reti-tartakower', at: '10.', solution: 'Bg5+',
+    id: 'reti-mate', cat: 'endgame', game: 'reti-tartakower', at: '10.', plies: 3, solution: 'Bg5+',
     q: 'Mate in 2. The black king stands on the open d-file.',
     explain: '10.Bg5+ is a double check, so only a king move helps. 10...Kc7 11.Bd8# or 10...Ke8 11.Rd8#.'
   },
@@ -224,7 +226,7 @@ window.QUIZZES = [
     explain: '41...Rc2#. The b3-bishop protects the rook, the rook covers b2 and d2, and the c3-knight covers b1 and d1.'
   },
   {
-    id: 'kasparov-bf1', cat: 'endgame', game: 'kasparov-immortal', at: '36.', move: 'Bf1',
+    id: 'kasparov-bf1', cat: 'endgame', game: 'kasparov-immortal', at: '36.', plies: 8, move: 'Bf1',
     q: 'The black king has walked all the way to d1. Kasparov played the quiet 36.Bf1. What does it threaten?',
     options: ['Qe2 mate', 'Rxb5, winning a pawn', 'Rd7, winning the d8-rook', 'Qc1+, forcing a queen trade'],
     explain: 'Bf1 attacks the queen and guards e2, so Qe2# is threatened. Black has to give back material to stop it.'

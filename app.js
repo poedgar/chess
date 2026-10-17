@@ -1019,6 +1019,7 @@
     // Leaving a training position: go back to the real position in the game.
     if (S.trainer && S.trainer.node) S.node = S.trainer.node;
     S.trainer = null;
+    stopReplay();
     S.mode = mode;
     stopAutoplay();
     clearTimeout(S.timer);
@@ -1120,6 +1121,8 @@
       if (review.cards[item.id]) { delete review.cards[item.id]; saveReview(); }
       return false;
     }
+    stopReplay();
+    replay.step = -1;
     if (!S.game || S.game.id !== game.id) loadGame(game.id);
     const node = [S.root, ...mainLine()][item.ply];
     // Answer options are shown in random order; options[0] is the right one.
@@ -1294,6 +1297,7 @@
     $('#trainer-status').textContent = puzzles ? S.allMsg || '' : '';
     $('#trainer-status').classList.toggle('hidden', !(puzzles && S.allMsg));
     renderChoices(T);
+    renderReplay(T);
     const explain = T.item && T.done && T.item.explain;
     $('#trainer-explain').classList.toggle('hidden', !explain);
     $('#trainer-explain').textContent = explain || '';
@@ -1332,7 +1336,8 @@
       const now = game && lineOf(game)[ply];
       if (!pos || !now || posKey(pos.fen) !== posKey(now.fen)) return null;
       return { id: `q:${q.id}`, kind: 'quiz', cat: q.cat, gameId: q.game, ply, fen: pos.fen, question: q.q,
-        solution: q.solution, exact: !!q.exact, options: q.options, move: q.move, explain: q.explain };
+        solution: q.solution, exact: !!q.exact, options: q.options, move: q.move, explain: q.explain,
+        line: builtInLine(q.game).slice(ply + 1, ply + 1 + (q.plies || 4)).map((n) => n.san) };
     }).filter(Boolean);
   }
 
@@ -1355,6 +1360,51 @@
         startTrainer('quizzes');
       });
       return b;
+    }));
+  }
+
+  // "Play the answer": replays the game from the quiz position on the board,
+  // without adding anything to the game.
+  const replay = { timer: null, step: -1 }; // step: index in item.line of the move on the board
+  function stopReplay() {
+    clearInterval(replay.timer);
+    replay.timer = null;
+  }
+
+  function playAnswer() {
+    const T = S.trainer;
+    if (!T || !T.item || !T.done) return;
+    if (replay.timer) { stopReplay(); return renderTrainer(); }
+    replay.step = -1;
+    let pos = T.node;
+    S.node = pos;
+    S.selected = S.wrong = null;
+    renderBoard();
+    renderTrainer();
+    replay.timer = setInterval(() => {
+      if (S.trainer !== T) return stopReplay();
+      const c = new Chess(pos.fen);
+      const m = c.move(T.item.line[++replay.step]);
+      if (m) {
+        pos = { san: m.san, from: m.from, to: m.to, fen: c.fen(), ply: pos.ply + 1, comment: '', nags: [], children: [], parent: pos };
+        S.node = pos;
+      }
+      if (!m || replay.step >= T.item.line.length - 1) stopReplay();
+      renderBoard();
+      renderTrainer();
+    }, 900);
+  }
+
+  function renderReplay(T) {
+    const item = T.item;
+    const show = !!(item && T.done && item.line && item.line.length);
+    $('#t-replay').classList.toggle('hidden', !show);
+    if (!show) return;
+    $('#btn-t-replay').textContent = replay.timer ? '■ Stop' : replay.step >= 0 ? '↺ Play again' : '▶ Play the answer';
+    $('#t-line').replaceChildren(...item.line.map((san, k) => {
+      const ply = item.ply + 1 + k;
+      const text = ply % 2 ? `${(ply + 1) / 2}. ${san}` : k === 0 ? `${ply / 2}... ${san}` : san;
+      return el('span', `mr-1.5 ${k === replay.step ? 'text-amber-300 font-semibold' : k < replay.step ? 'text-slate-200' : ''}`, text);
     }));
   }
 
@@ -1660,6 +1710,7 @@
   $('#btn-t-solution').addEventListener('click', trainerSolution);
   $('#btn-t-next').addEventListener('click', () => { if (S.trainer && !S.checking) nextItem(); });
   $('#btn-t-analyze').addEventListener('click', analyzeAll);
+  $('#btn-t-replay').addEventListener('click', playAnswer);
   $('#engine-toggle').addEventListener('change', (e) => enableEngine(e.target.checked));
   $('#btn-analyze').addEventListener('click', analyzeGame);
   $('#btn-play-best').addEventListener('click', () => {

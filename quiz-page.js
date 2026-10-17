@@ -60,10 +60,11 @@
   // Same shape as the quiz items of the games page, so Review cards work there.
   const ALL = window.QUIZZES.map((q) => {
     const ply = quizPly(q.at);
-    const node = lineOf(q.game)[ply];
-    if (!node) return null;
-    return { id: `q:${q.id}`, kind: 'quiz', cat: q.cat, gameId: q.game, ply, fen: node.fen, question: q.q,
-      solution: q.solution, exact: !!q.exact, options: q.options, move: q.move, explain: q.explain };
+    const line = lineOf(q.game);
+    if (!line[ply]) return null;
+    return { id: `q:${q.id}`, kind: 'quiz', cat: q.cat, gameId: q.game, ply, fen: line[ply].fen, question: q.q,
+      solution: q.solution, exact: !!q.exact, options: q.options, move: q.move, explain: q.explain,
+      line: line.slice(ply + 1, ply + 1 + (q.plies || 4)).map((n) => n.san) };
   }).filter(Boolean);
   const inCat = (cat) => ALL.filter((q) => cat === 'all' || q.cat === cat);
 
@@ -122,6 +123,7 @@
   }
 
   function goPicker() {
+    stopReplay();
     Engine.stop();
     if (location.hash) history.pushState('', '', location.pathname);
     renderPicker();
@@ -129,6 +131,8 @@
   }
 
   function showQuestion() {
+    stopReplay();
+    P.step = -1;
     const item = R.items[R.i];
     const order = item.options ? item.options.map((_, i) => i) : [];
     for (let i = order.length - 1; i > 0; i--) {
@@ -138,7 +142,8 @@
     Object.assign(Q, { item, tries: 0, hinted: false, done: false, picked: new Set(), order, checking: false,
       msg: null });
     const node = lineOf(item.gameId)[item.ply];
-    Object.assign(B, { fen: item.fen, last: node.from ? [node.from, node.to] : null, selected: null, wrong: null,
+    Q.startLast = node.from ? [node.from, node.to] : null;
+    Object.assign(B, { fen: item.fen, last: Q.startLast, selected: null, wrong: null,
       orientation: item.ply % 2 ? 'b' : 'w', clickable: !item.options });
     render();
   }
@@ -175,6 +180,7 @@
 
   function next() {
     if (Q.checking) return;
+    stopReplay();
     if (!Q.done) R.results[Q.item.id] = R.results[Q.item.id] ?? null; // skipped
     if (++R.i < R.items.length) return showQuestion();
     Engine.stop();
@@ -233,6 +239,44 @@
   function reveal() {
     if (Q.done || Q.checking) return;
     finish('shown');
+  }
+
+  // ---------- playing the answer ----------
+  // Replays the game from the quiz position: the answer and the moves that follow it.
+  const P = { timer: null, step: -1 }; // step: index in item.line of the move on the board, -1 = none yet
+  function stopReplay() {
+    clearInterval(P.timer);
+    P.timer = null;
+  }
+
+  function playAnswer() {
+    if (P.timer) { stopReplay(); return renderReplay(); }
+    const { item } = Q;
+    const c = new Chess(item.fen);
+    P.step = -1;
+    Object.assign(B, { fen: item.fen, last: Q.startLast, selected: null, wrong: null });
+    renderBoard();
+    P.timer = setInterval(() => {
+      const m = c.move(item.line[++P.step]);
+      if (m) Object.assign(B, { fen: c.fen(), last: [m.from, m.to] });
+      if (!m || P.step >= item.line.length - 1) stopReplay();
+      renderBoard();
+      renderReplay();
+    }, 900);
+    renderReplay();
+  }
+
+  function renderReplay() {
+    const { item } = Q;
+    const show = Q.done && item.line.length > 0;
+    $('#run-replay').classList.toggle('hidden', !show);
+    if (!show) return;
+    $('#btn-replay').textContent = P.timer ? '■ Stop' : P.step >= 0 ? '↺ Play again' : '▶ Play the answer';
+    $('#run-line').replaceChildren(...item.line.map((san, k) => {
+      const ply = item.ply + 1 + k;
+      const text = ply % 2 ? `${(ply + 1) / 2}. ${san}` : k === 0 ? `${ply / 2}... ${san}` : san;
+      return el('span', `mr-1.5 ${k === P.step ? 'text-amber-300 font-semibold' : k < P.step ? 'text-slate-200' : ''}`, text);
+    }));
   }
 
   // ---------- engine ----------
@@ -298,6 +342,7 @@
     $('#run-msg').className = `mt-3 text-sm ${msg ? msg.tone : ''}`;
     $('#run-explain').classList.toggle('hidden', !Q.done);
     $('#run-explain').textContent = Q.done ? item.explain : '';
+    renderReplay();
     $('#btn-hint').classList.toggle('hidden', Q.done || !!item.options);
     $('#btn-show').classList.toggle('hidden', Q.done);
     $('#btn-next').textContent = Q.done ? (R.i + 1 < total ? 'Next' : 'See results') : 'Skip';
@@ -381,6 +426,7 @@
   $('#btn-hint').addEventListener('click', hint);
   $('#btn-show').addEventListener('click', reveal);
   $('#btn-next').addEventListener('click', next);
+  $('#btn-replay').addEventListener('click', playAnswer);
   $('#btn-back').addEventListener('click', goPicker);
   $('#btn-cats').addEventListener('click', goPicker);
   $('#btn-again').addEventListener('click', () => startRound(R.cat));

@@ -105,7 +105,7 @@
           <div id="ply-label" class="text-xs text-slate-400 shrink-0 ml-2"></div>
         </div>
 
-        <div class="mt-4 flex items-center justify-center gap-1.5">
+        <div id="nav-bar" class="mt-4 flex items-center justify-center gap-1.5">
           <button data-nav="first" class="nav-btn" title="Start (Home)"><svg viewBox="0 0 24 24" class="w-5 h-5 mx-auto" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
           <button data-nav="prev" class="nav-btn" title="Previous (←)"><svg viewBox="0 0 24 24" class="w-5 h-5 mx-auto" fill="currentColor"><path d="M17 5v14L6 12z"/></svg></button>
           <button id="btn-play" class="nav-btn w-14" title="Autoplay (Space)"></button>
@@ -124,9 +124,12 @@
         <div class="mt-4 bg-slate-800/60 rounded-xl p-3">
           <div class="flex flex-wrap items-center gap-2 text-sm">
             <span class="text-slate-400">Mode</span>
-            <div class="inline-flex rounded-lg bg-slate-900 p-0.5">
+            <div class="inline-flex flex-wrap rounded-lg bg-slate-900 p-0.5">
               <button data-mode="replay" class="mode-btn">Replay</button>
               <button data-mode="quiz" class="mode-btn">Guess the move</button>
+              <button data-mode="puzzle" class="mode-btn" title="Find better moves where the games went wrong">Puzzles</button>
+              <button data-mode="quizzes" class="mode-btn" title="Questions on the famous games: beginnings, strategy, tactics and endings">Quizzes</button>
+              <button data-mode="review" class="mode-btn" title="Positions you missed, spaced out over the following days">Review <span id="review-count" class="hidden ml-0.5 inline-block min-w-5 rounded-full bg-sky-500 text-slate-950 text-xs font-bold px-1.5"></span></button>
             </div>
             <div id="quiz-side-wrap" class="hidden items-center gap-2">
               <span class="text-slate-400">as</span>
@@ -142,6 +145,20 @@
             <div class="mt-2 flex gap-2">
               <button id="btn-hint" class="bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5">Hint</button>
               <button id="btn-reveal" class="bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5">Show move</button>
+            </div>
+          </div>
+          <div id="trainer-panel" class="hidden mt-3 text-sm">
+            <div id="quiz-cats" class="hidden mb-3 flex flex-wrap gap-1.5"></div>
+            <p id="trainer-progress" class="text-xs text-slate-400"></p>
+            <p id="trainer-msg" class="mt-1 text-slate-300"></p>
+            <div id="trainer-choices" class="hidden mt-2 flex flex-col gap-1.5"></div>
+            <p id="trainer-explain" class="hidden mt-2 text-slate-200 leading-relaxed border-l-2 border-amber-500/70 pl-2"></p>
+            <p id="trainer-status" class="hidden mt-1 text-xs text-slate-400"></p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button id="btn-t-hint" class="bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5">Hint</button>
+              <button id="btn-t-solution" class="bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5">Show solution</button>
+              <button id="btn-t-next" class="bg-amber-500 hover:bg-amber-400 text-slate-900 font-semibold rounded px-3 py-1.5">Next</button>
+              <button id="btn-t-analyze" class="bg-sky-900/70 hover:bg-sky-800 text-sky-100 rounded px-3 py-1.5"></button>
             </div>
           </div>
         </div>
@@ -173,7 +190,7 @@
     </section>
 
     <!-- Info + commentary -->
-    <aside class="order-2 lg:order-none flex flex-col gap-4 min-h-0 lg:max-h-[calc(100vh-110px)]">
+    <aside class="order-2 lg:order-none flex flex-col gap-4 min-h-0 lg:max-h-[calc(100vh-110px)] lg:overflow-y-auto scroll-thin">
       <div class="bg-slate-800/60 rounded-xl p-4">
         <div class="flex flex-wrap items-start gap-2">
           <div class="flex-1 min-w-[12rem]">
@@ -186,7 +203,7 @@
         <div id="g-tags" class="mt-2 flex flex-wrap gap-1"></div>
       </div>
 
-      <div class="bg-slate-800/60 rounded-xl p-4">
+      <div id="note-card" class="bg-slate-800/60 rounded-xl p-4">
         <div class="flex items-center justify-between">
           <h3 id="note-title" class="text-sm font-semibold text-amber-400"></h3>
           <button id="btn-edit-note" class="text-xs text-slate-400 hover:text-amber-400">✎ Edit</button>
@@ -210,7 +227,16 @@
         </div>
       </div>
 
-      <div class="bg-slate-800/60 rounded-xl p-4 flex flex-col min-h-0 flex-1">
+      <div id="explorer-card" class="bg-slate-800/60 rounded-xl p-4">
+        <div class="flex items-baseline justify-between gap-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Opening</h3>
+          <span id="opening-eco" class="text-xs font-mono text-slate-500"></span>
+        </div>
+        <p id="opening-name" class="mt-1 text-sm font-medium"></p>
+        <div id="explorer-list" class="mt-2 space-y-1"></div>
+      </div>
+
+      <div class="bg-slate-800/60 rounded-xl p-4 flex flex-col min-h-0 lg:min-h-[16rem] flex-1">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Moves <span class="normal-case font-normal tracking-normal text-slate-500">· underlined = has notes · indented = alternatives</span></h3>
         <div id="moves" class="mt-2 text-sm font-mono overflow-y-auto scroll-thin min-h-24 max-h-72 lg:max-h-none flex-1"></div>
       </div>
@@ -255,7 +281,9 @@
 
   <script src="pgn.js"></script>
   <script src="engine.js"></script>
+  <script src="openings.js"></script>
   <script src="games.js"></script>
+  <script src="quizzes.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

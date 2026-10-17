@@ -4,6 +4,12 @@
   const EVALS_KEY = 'chess-classics-evals-v1';
   const LIVE_DEPTH = 20;    // live analysis of the current position
   const ANALYZE_DEPTH = 16; // per position when analysing a whole game
+  const CHECK_DEPTH = 14;   // quick check of a guess in Guess the move / training
+  const CLOSE_ENOUGH = 0.08; // a guess within this much winning chance of the target move counts as good
+  const REVIEW_KEY = 'chess-classics-review-v1';
+  const REVIEW_DAYS = [1, 3, 7, 16, 35]; // spaced-review intervals; a card is learned after the last one
+  const DAY = 24 * 60 * 60 * 1000;
+  const ENGINE_ERROR = 'Engine unavailable. It loads from the internet, so check your connection.';
   const GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
   const FILES = 'abcdefgh';
   const icon = (d) => `<svg viewBox="0 0 24 24" class="w-5 h-5 mx-auto" fill="currentColor">${d}</svg>`;
@@ -36,7 +42,7 @@
   };
 
   let library = store.get(STORAGE_KEY, null) || structuredClone(window.DEFAULT_GAMES);
-  const prefs = Object.assign({ lastId: null, quizSide: 'w', engine: false }, store.get(PREFS_KEY, {}));
+  const prefs = Object.assign({ lastId: null, quizSide: 'w', engine: false, quizCat: 'all' }, store.get(PREFS_KEY, {}));
   const saveLibrary = () => store.set(STORAGE_KEY, library);
   const savePrefs = () => store.set(PREFS_KEY, prefs);
 
@@ -54,8 +60,10 @@
     selected: null,   // selected square on the board
     wrong: null,      // quiz: [from, to] of last wrong try
     hinted: false,
-    score: { right: 0, tries: 0 },
+    score: { points: 0, tries: 0 },
     timer: null,      // quiz: pending opponent reply
+    checking: false,  // a guess is being checked by the engine
+    trainer: null,    // puzzle / review session, see startTrainer()
     promo: null,      // pending promotion { from, to }
     // Engine evaluations by position, always from White's point of view:
     // fenKey -> { score: { cp } | { mate }, depth, pv: [uci] }
@@ -63,8 +71,13 @@
     live: null,       // { node, score, depth, pv } shown in the engine panel
     engineState: 'off', // off | loading | ready | error
     analyzing: false,
-    analyzeMsg: ''
+    analyzingAll: false, // analysing the whole library (for puzzles), not just the open game
+    analyzeMsg: '',
+    allMsg: ''           // progress of the whole-library analysis, shown in the Puzzles panel
   };
+  // Spaced review cards and solved puzzles: { cards: { id: card }, solved: { puzzleId: true } }
+  const review = Object.assign({ cards: {}, solved: {} }, store.get(REVIEW_KEY, {}));
+  const saveReview = () => store.set(REVIEW_KEY, review);
   let nextId = 1;
 
   const emptyTree = () => PGN.buildTree(Chess, PGN.parsePgn('').root);
@@ -77,7 +90,7 @@
   function loadGame(id) {
     stopAutoplay();
     clearTimeout(S.timer);
-    if (S.analyzing) { S.analyzing = false; Engine.stop(); }
+    if (S.analyzing && !S.analyzingAll) { S.analyzing = false; Engine.stop(); }
     S.analyzeMsg = '';
     S.live = null;
     const game = library.find((g) => g.id === id) || library[0];
@@ -91,7 +104,7 @@
     Object.assign(S, {
       game: game || null, root, node: root,
       selected: null, wrong: null, hinted: false,
-      score: { right: 0, tries: 0 },
+      score: { points: 0, tries: 0 },
       orientation: S.mode === 'quiz' ? prefs.quizSide : 'w'
     });
     if (game) { prefs.lastId = game.id; savePrefs(); }
@@ -125,12 +138,13 @@
   const fenKey = (fen) => fen.split(' ').slice(0, 4).join(' ');
 
   // Finished positions are scored directly, without asking the engine.
+  function terminalFen(fen) {
+    const c = new Chess(fen);
+    return c.in_checkmate() ? { score: { mate: 0, winner: c.turn() === 'w' ? 'b' : 'w' }, depth: 99, pv: [] }
+      : c.game_over() ? { score: { cp: 0 }, depth: 99, pv: [] } : null;
+  }
   function terminal(node) {
-    if (!('term' in node)) {
-      const c = new Chess(node.fen);
-      node.term = c.in_checkmate() ? { score: { mate: 0, winner: c.turn() === 'w' ? 'b' : 'w' }, depth: 99, pv: [] }
-        : c.game_over() ? { score: { cp: 0 }, depth: 99, pv: [] } : null;
-    }
+    if (!('term' in node)) node.term = terminalFen(node.fen);
     return node.term;
   }
   const evalOf = (node) => terminal(node) || S.evals.get(fenKey(node.fen)) || null;
@@ -159,6 +173,31 @@
     clearTimeout(evalsSaveTimer);
     evalsSaveTimer = setTimeout(() => store.set(EVALS_KEY, Object.fromEntries(S.evals)), 1000);
   }
+
+  // Evaluation of any position, asking the engine when nothing deep enough is stored.
+  async function evalFen(fen, depth = CHECK_DEPTH) {
+    const term = terminalFen(fen);
+    if (term) return term;
+    const known = S.evals.get(fenKey(fen));
+    if (known && known.depth >= depth) return known;
+    await Engine.start();
+    const info = await Engine.analyse(fen, { depth });
+    if (!info) throw new Error('Engine search was interrupted');
+    const e = fromEngine(info, fen);
+    storeEval(fen, e);
+    return e;
+  }
+
+  // Is the position after my move about as good for the mover as after the target move?
+  async function closeEnough(myFen, targetFen, mover) {
+    const mine = await evalFen(myFen);
+    const target = await evalFen(targetFen);
+    const loss = (mover === 'w' ? 1 : -1) * (winChance(target.score) - winChance(mine.score));
+    return { close: loss <= CLOSE_ENOUGH, mine: mine.score, target: target.score };
+  }
+
+  const fenAfter = (fen, san) => { const c = new Chess(fen); c.move(san); return c.fen(); };
+  const labelAt = (ply, san) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'} ${san}`;
 
   function uciToSan(fen, uci) {
     const m = new Chess(fen).move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
@@ -217,6 +256,70 @@
     }
   }
 
+  // ---------- openings and the library index ----------
+  // Positions are compared without the en-passant field, so transpositions match.
+  const posKey = (fen) => fen.split(' ').slice(0, 3).join(' ');
+  const OPENING_BY_POS = new Map();
+  window.OPENINGS.forEach(([eco, name, moves]) => {
+    try {
+      const line = PGN.mainLine(PGN.buildTree(Chess, PGN.parsePgn(moves).root));
+      OPENING_BY_POS.set(posKey(line[line.length - 1].fen), { eco, name });
+    } catch (err) { console.warn(`Opening "${name}": ${err.message}`); }
+  });
+
+  // The deepest named opening on the way to this position.
+  function openingAt(node) {
+    for (let n = node; n; n = n.parent) {
+      const o = OPENING_BY_POS.get(posKey(n.fen));
+      if (o) return o;
+    }
+    return null;
+  }
+
+  // Main lines of every library game, rebuilt only when a game's PGN changes.
+  const libIndex = new Map(); // game id -> { pgn, line: [root, ...main line], opening }
+  function indexOf(game) {
+    let entry = libIndex.get(game.id);
+    if (!entry || entry.pgn !== game.pgn) {
+      let line = [];
+      try {
+        const root = PGN.buildTree(Chess, PGN.parsePgn(game.pgn).root);
+        line = [root, ...PGN.mainLine(root)];
+      } catch { /* an invalid game simply has no positions */ }
+      const named = line.length ? openingAt(line[line.length - 1]) : null;
+      entry = { pgn: game.pgn, line, opening: named };
+      libIndex.set(game.id, entry);
+    }
+    return entry;
+  }
+  // The open game uses its live tree, so unsaved positions and evaluations line up.
+  const lineOf = (game) => (S.game && game.id === S.game.id ? [S.root, ...mainLine()] : indexOf(game).line);
+
+  // Other library games that reached this position, grouped by the move they played next.
+  function explorerRows(node) {
+    const key = posKey(node.fen);
+    const rows = new Map();
+    library.forEach((g) => {
+      if (S.game && g.id === S.game.id) return;
+      const line = indexOf(g).line;
+      const i = line.findIndex((n) => posKey(n.fen) === key);
+      if (i < 0) return;
+      const next = line[i + 1];
+      const label = next ? labelAt(next.ply, next.san) : 'Game ended here';
+      if (!rows.has(label)) rows.set(label, []);
+      rows.get(label).push({ game: g, ply: i });
+    });
+    return [...rows.entries()].sort((a, b) => b[1].length - a[1].length);
+  }
+
+  function openGameAt(id, ply) {
+    if (S.mode !== 'replay') setMode('replay');
+    loadGame(id);
+    goTo([S.root, ...mainLine()][ply] || S.root);
+  }
+
+  const training = () => S.mode === 'puzzle' || S.mode === 'review' || S.mode === 'quizzes';
+
   // ---------- rendering ----------
   function render() {
     renderBoard();
@@ -227,7 +330,40 @@
     renderQuiz();
     renderEngine();
     renderEvalGraph();
+    renderExplorer();
+    renderTrainer();
+    $('#nav-bar').classList.toggle('opacity-40', training());
     requestLive();
+  }
+
+  function renderExplorer() {
+    const show = !!S.game && S.mode === 'replay';
+    $('#explorer-card').classList.toggle('hidden', !show);
+    if (!show) return;
+    const o = openingAt(S.node);
+    $('#opening-name').textContent = o ? o.name : S.node === S.root ? 'Starting position' : 'No named opening yet';
+    $('#opening-eco').textContent = o ? o.eco : '';
+    const rows = explorerRows(S.node);
+    const list = $('#explorer-list');
+    if (!rows.length) {
+      list.replaceChildren(el('p', 'text-xs text-slate-500', 'No other game in your library reached this position.'));
+      return;
+    }
+    const count = rows.reduce((n, [, hits]) => n + hits.length, 0);
+    list.replaceChildren(el('p', 'text-xs text-slate-400', `${count} other game${count === 1 ? '' : 's'} in your library reached this position:`));
+    rows.forEach(([label, hits]) => {
+      const row = el('div', 'flex items-baseline gap-2 text-sm');
+      row.appendChild(el('span', 'font-mono text-sky-200 shrink-0 w-20', label));
+      const games = el('div', 'flex flex-col min-w-0');
+      hits.forEach(({ game, ply }) => {
+        const b = el('button', 'truncate text-left text-slate-300 hover:text-amber-400 hover:underline', `${title(game)}${game.year ? `, ${game.year}` : ''}`);
+        b.title = 'Open this game at this position';
+        b.addEventListener('click', () => openGameAt(game.id, ply));
+        games.appendChild(b);
+      });
+      row.appendChild(games);
+      list.appendChild(row);
+    });
   }
 
   function renderBoard() {
@@ -287,21 +423,24 @@
     else if (main && node !== S.root && !node.children.length && g) status = `Final position · ${g.result}`;
     $('#turn').textContent = status;
     const total = mainLine().length;
-    $('#ply-label').textContent = !total ? '' : main ? `Move ${node.ply} / ${total}` : 'Alternative line';
+    $('#ply-label').textContent = !total || training() ? '' : main ? `Move ${node.ply} / ${total}` : 'Alternative line';
   }
 
   function renderInfo() {
     const g = S.game;
     $('#g-title').textContent = g ? title(g) : 'No games yet';
+    // The opening name and tags could give away a puzzle or quiz answer.
+    const hide = training();
     $('#g-meta').textContent = g
-      ? [g.event, g.year, g.opening, g.result].filter(Boolean).join(' · ')
+      ? [g.event, g.year, hide ? '' : g.opening, g.result].filter(Boolean).join(' · ')
       : 'Add a game to get started.';
-    $('#g-tags').replaceChildren(...((g && g.tags) || []).map((t) =>
+    $('#g-tags').replaceChildren(...((g && !hide && g.tags) || []).map((t) =>
       el('span', 'text-[11px] bg-slate-700/80 text-slate-300 rounded-full px-2 py-0.5', t)));
     $('#btn-edit-game').disabled = $('#btn-delete-game').disabled = !g;
   }
 
   function renderNote() {
+    $('#note-card').classList.toggle('hidden', training());
     const node = S.node;
     const main = isMain(node);
     const titleEl = $('#note-title');
@@ -420,12 +559,17 @@
   function renderMoves() {
     const box = $('#moves');
     box.replaceChildren();
+    if (training()) {
+      box.appendChild(el('p', 'text-slate-500 font-sans text-sm', 'Moves are hidden while you train.'));
+      return;
+    }
+    const quiz = S.mode === 'quiz'; // only show the moves already played, so the list gives nothing away
     const grid = el('div', 'grid grid-cols-[2.5rem_1fr_1fr] gap-y-0.5 items-center');
     const num = (n) => el('span', 'text-slate-500 text-right pr-2', `${Math.ceil(n.ply / 2)}.`);
 
     let prev = S.root;
     let rowOpen = false; // a white move is waiting for black's reply in this row
-    while (prev.children.length) {
+    while (prev.children.length && !(quiz && prev === S.node)) {
       const [main, ...alts] = prev.children;
       if (main.ply % 2) { grid.appendChild(num(main)); grid.appendChild(moveSpan(main, main.san)); rowOpen = true; }
       else {
@@ -448,7 +592,7 @@
     }
     if (rowOpen) grid.appendChild(el('span'));
     box.appendChild(grid);
-    if (S.game && S.root.children.length) box.appendChild(el('div', 'mt-2 text-center text-slate-400', S.game.result));
+    if (S.game && S.root.children.length && !(quiz && S.node.children.length)) box.appendChild(el('div', 'mt-2 text-center text-slate-400', S.game.result));
     const cur = box.querySelector('.cur');
     if (cur) cur.scrollIntoView({ block: 'nearest' });
     else box.scrollTop = 0;
@@ -474,8 +618,11 @@
     const q = $('#search').value.trim().toLowerCase();
     const list = $('#library');
     list.replaceChildren();
-    const matches = library.filter((g) =>
-      [g.white, g.black, g.event, g.year, g.opening, ...(g.tags || [])].join(' ').toLowerCase().includes(q));
+    const matches = library.filter((g) => {
+      const named = indexOf(g).opening;
+      return [g.white, g.black, g.event, g.year, g.opening, named && named.name, ...(g.tags || [])]
+        .join(' ').toLowerCase().includes(q);
+    });
     if (!matches.length) list.appendChild(el('li', 'text-sm text-slate-500 px-2 py-3', 'No games found.'));
     matches.forEach((g) => {
       const active = S.game && S.game.id === g.id;
@@ -483,7 +630,10 @@
       const btn = el('button', `w-full text-left rounded-lg px-3 py-2 ${active ? 'bg-amber-500/15 ring-1 ring-amber-500/60' : 'hover:bg-slate-700/60'}`);
       btn.appendChild(el('div', 'text-sm font-medium leading-snug', title(g)));
       btn.appendChild(el('div', 'text-xs text-slate-400 mt-0.5', [g.event, g.year].filter(Boolean).join(', ') + (g.result ? ` · ${g.result}` : '')));
-      btn.addEventListener('click', () => loadGame(g.id));
+      btn.addEventListener('click', () => {
+        if (training()) setMode('replay');
+        loadGame(g.id);
+      });
       li.appendChild(btn);
       list.appendChild(li);
     });
@@ -504,10 +654,10 @@
 
   const lineEnd = (node) => { while (node.children.length) node = node.children[0]; return node; };
   const nav = {
-    first: () => goTo(S.root),
-    prev: () => goTo(S.node.parent),
-    next: () => goTo(S.node.children[0]),
-    last: () => goTo(lineEnd(S.node))
+    first: () => training() || goTo(S.root),
+    prev: () => training() || goTo(S.node.parent),
+    next: () => training() || goTo(S.node.children[0]),
+    last: () => training() || goTo(lineEnd(S.node))
   };
 
   function stopAutoplay() {
@@ -518,7 +668,7 @@
 
   function toggleAutoplay() {
     if (S.playing) return stopAutoplay();
-    if (S.mode === 'quiz') setMode('replay');
+    if (S.mode !== 'replay') setMode('replay');
     if (!S.node.children.length) goTo(S.root);
     $('#btn-play').innerHTML = PAUSE_ICON;
     S.playing = setInterval(() => {
@@ -532,7 +682,9 @@
     if (!S.game || S.promo) return;
     const cell = e.target.closest('.sq');
     if (!cell) return;
+    if (S.checking) return;
     if (S.mode === 'quiz' && (!S.node.children.length || sideToMove() !== prefs.quizSide)) return;
+    if (training() && !(S.trainer && S.trainer.item && !S.trainer.item.options && !S.trainer.done && S.node === S.trainer.node)) return;
     const sq = cell.dataset.sq;
     const chess = new Chess(S.node.fen);
 
@@ -541,7 +693,7 @@
       if (options.length) {
         const from = S.selected;
         if (options.some((m) => m.promotion)) return showPromo(from, sq, chess.turn());
-        return S.mode === 'quiz' ? tryMove(from, sq) : playMove({ from, to: sq });
+        return submitMove({ from, to: sq });
       }
     }
     const piece = chess.get(sq);
@@ -559,8 +711,7 @@
       b.appendChild(glyph);
       b.addEventListener('click', () => {
         hidePromo();
-        if (S.mode === 'quiz') tryMove(from, to, p);
-        else playMove({ from, to, promotion: p });
+        submitMove({ from, to, promotion: p });
       });
       return b;
     }));
@@ -570,6 +721,12 @@
   function hidePromo() {
     S.promo = null;
     $('#promo').classList.replace('flex', 'hidden');
+  }
+
+  function submitMove(move) {
+    if (S.mode === 'quiz') return tryMove(move.from, move.to, move.promotion);
+    if (training()) return trainerMove(move);
+    return playMove(move);
   }
 
   // Follows an existing move if it was already recorded, otherwise adds it as
@@ -660,7 +817,7 @@
   }
 
   function renderEngine() {
-    const quiz = S.mode === 'quiz';
+    const quiz = S.mode !== 'replay';
     $('#engine-card').classList.toggle('hidden', quiz || !S.game);
     $('#engine-toggle').checked = prefs.engine;
     const on = prefs.engine && !quiz && !!S.game;
@@ -690,8 +847,9 @@
     $('#engine-pv').textContent = pv ? pvText(S.node, pv, 8) : '';
     drawArrow(pv ? pv[0] : null);
 
-    $('#btn-analyze').textContent = S.analyzing ? 'Stop' : 'Analyze game';
-    $('#analyze-status').classList.toggle('hidden', !S.analyzeMsg);
+    $('#btn-analyze').textContent = S.analyzing && !S.analyzingAll ? 'Stop' : 'Analyze game';
+    $('#btn-analyze').disabled = S.analyzingAll;
+    $('#analyze-status').classList.toggle('hidden', !S.analyzeMsg || S.analyzingAll);
     $('#analyze-status').textContent = S.analyzeMsg;
   }
 
@@ -711,38 +869,73 @@
       <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="0.16" stroke-linecap="round" marker-end="url(#arrowhead)"/>`;
   }
 
-  async function analyzeGame() {
-    if (S.analyzing) { S.analyzing = false; Engine.stop(); return; }
-    const game = S.game;
-    if (!game) return;
-    const positions = [S.root, ...mainLine()];
+  // Analyses the main line of each game in `games`; returns true when it ran to the end.
+  async function runAnalysis(games, onProgress) {
     S.analyzing = true;
     clearTimeout(liveTimer);
     S.analyzeMsg = 'Loading Stockfish…';
-    renderEngine();
+    onProgress();
     try { await Engine.start(); }
     catch {
       S.analyzing = false;
-      S.analyzeMsg = 'Engine unavailable. It loads from the internet, so check your connection.';
-      return renderEngine();
+      S.analyzeMsg = ENGINE_ERROR;
+      onProgress();
+      return false;
     }
-    for (let i = 0; i < positions.length && S.analyzing && S.game === game; i++) {
-      const node = positions[i];
-      S.analyzeMsg = `Analysing position ${i + 1} of ${positions.length}…`;
+    for (const [g, game] of games.entries()) {
+      const positions = lineOf(game);
+      for (let i = 0; i < positions.length; i++) {
+        if (!S.analyzing) return false;
+        const known = evalOf(positions[i]);
+        if (known && known.depth >= ANALYZE_DEPTH) continue;
+        S.analyzeMsg = games.length > 1
+          ? `Analysing game ${g + 1} of ${games.length} (${title(game)}), position ${i + 1} of ${positions.length}…`
+          : `Analysing position ${i + 1} of ${positions.length}…`;
+        onProgress(i);
+        const info = await Engine.analyse(positions[i].fen, { depth: ANALYZE_DEPTH });
+        if (!info) { S.analyzing = false; return false; } // stopped
+        storeEval(positions[i].fen, fromEngine(info, positions[i].fen));
+      }
+    }
+    S.analyzing = false;
+    return true;
+  }
+
+  function stopAnalysis() {
+    S.analyzing = false;
+    Engine.stop();
+  }
+
+  async function analyzeGame() {
+    if (S.analyzing) return stopAnalysis();
+    const game = S.game;
+    if (!game) return;
+    const finished = await runAnalysis([game], (i) => {
+      if (S.game !== game) return;
       renderEngine();
-      const known = evalOf(node);
-      if (known && known.depth >= ANALYZE_DEPTH) continue;
-      const info = await Engine.analyse(node.fen, { depth: ANALYZE_DEPTH });
-      if (!info) break; // stopped
-      storeEval(node.fen, fromEngine(info, node.fen));
       renderEvalGraph();
       if (i % 5 === 0) renderMoves();
-    }
+    });
     if (S.game !== game) return; // another game was opened meanwhile
-    const finished = S.analyzing;
-    S.analyzing = false;
-    S.analyzeMsg = finished ? analysisSummary() : 'Analysis stopped.';
+    if (S.analyzeMsg !== ENGINE_ERROR) S.analyzeMsg = finished ? analysisSummary() : 'Analysis stopped.';
     render();
+  }
+
+  const isAnalysed = (game) => lineOf(game).every((n) => { const e = evalOf(n); return e && e.depth >= ANALYZE_DEPTH; });
+
+  // Analyses every game that still needs it, so their mistakes can become puzzles.
+  async function analyzeAll() {
+    if (S.analyzing) return stopAnalysis();
+    const todo = library.filter((g) => !isAnalysed(g));
+    if (!todo.length) return;
+    S.analyzingAll = true;
+    const finished = await runAnalysis(todo, () => { S.allMsg = S.analyzeMsg; renderTrainer(); });
+    S.analyzingAll = false;
+    S.allMsg = S.analyzeMsg === ENGINE_ERROR ? ENGINE_ERROR
+      : finished ? '' : 'Analysis stopped. Puzzles from the games analysed so far are ready.';
+    S.analyzeMsg = '';
+    if (S.mode === 'puzzle') startTrainer('puzzle');
+    else render();
   }
 
   function analysisSummary() {
@@ -821,8 +1014,11 @@
     if (cross) cross.setAttribute('visibility', 'hidden');
   }
 
-  // ---------- guess-the-move mode ----------
+  // ---------- modes ----------
   function setMode(mode) {
+    // Leaving a training position: go back to the real position in the game.
+    if (S.trainer && S.trainer.node) S.node = S.trainer.node;
+    S.trainer = null;
     S.mode = mode;
     stopAutoplay();
     clearTimeout(S.timer);
@@ -834,14 +1030,353 @@
     $('#quiz-side-wrap').classList.toggle('flex', mode === 'quiz');
     $('#quiz-panel').classList.toggle('hidden', mode !== 'quiz');
     if (mode === 'quiz') {
-      S.score = { right: 0, tries: 0 };
+      S.score = { points: 0, tries: 0 };
       S.orientation = prefs.quizSide;
       if (S.node) S.node = mainAncestor(S.node); // the quiz follows the game itself
     }
     if (!S.node) return;
+    if (training()) return startTrainer(mode);
     render();
     if (mode === 'quiz') quizStep();
   }
+
+  // ---------- puzzles and spaced review ----------
+  // A training item is a position from a library game plus the move to find:
+  // { id, kind: 'puzzle' | 'game' | 'quiz', gameId, ply, fen, solution (SAN), gameMove?, gameNag? }
+  // Quiz items may instead ask a multiple-choice question (options, the first is right).
+
+  // Every move marked ? or ?? (by you or by the engine) whose better move is known.
+  function collectPuzzles() {
+    const items = [];
+    library.forEach((game) => {
+      const line = lineOf(game);
+      for (let i = 1; i < line.length; i++) {
+        const node = line[i];
+        const before = evalOf(line[i - 1]);
+        const best = before && before.pv && before.pv[0];
+        if (!best || best.slice(0, 4) === node.from + node.to) continue;
+        const manual = qualityNag(node);
+        const v = engineVerdict(node);
+        const nag = manual === 2 || manual === 4 ? manual : v && (v.nag === 2 || v.nag === 4) ? v.nag : null;
+        if (!nag) continue;
+        items.push({ id: `p:${game.id}:${i - 1}`, kind: 'puzzle', gameId: game.id, ply: i - 1, fen: line[i - 1].fen,
+          solution: uciToSan(line[i - 1].fen, best), gameMove: node.san, gameNag: nag });
+      }
+    });
+    return items;
+  }
+
+  // Leitner boxes: a card moves up a box when you get it right and back to the
+  // first box when you miss it. After the last box it counts as learned.
+  function addCard(item) {
+    review.cards[item.id] = { ...item, box: 0, due: Date.now() + REVIEW_DAYS[0] * DAY };
+    saveReview();
+    renderModeButtons();
+  }
+
+  function gradeCard(id, success) {
+    const card = review.cards[id];
+    if (!card) return;
+    if (!success) card.box = 0;
+    else if (card.box + 1 >= REVIEW_DAYS.length) { delete review.cards[id]; saveReview(); return; }
+    else card.box++;
+    card.due = Date.now() + REVIEW_DAYS[card.box] * DAY;
+    saveReview();
+  }
+
+  const dueCards = () => Object.values(review.cards).filter((c) => c.due <= Date.now()).sort((a, b) => a.due - b.due);
+
+  function renderModeButtons() {
+    const n = dueCards().length;
+    const badge = $('#review-count');
+    badge.textContent = String(n);
+    badge.classList.toggle('hidden', !n);
+  }
+
+  function startTrainer(kind) {
+    let items;
+    if (kind === 'puzzle') {
+      // Unsolved puzzles first; the sort is stable, so games keep their order.
+      items = collectPuzzles().sort((a, b) => (review.solved[a.id] ? 1 : 0) - (review.solved[b.id] ? 1 : 0));
+    } else if (kind === 'quizzes') {
+      items = collectQuizzes(prefs.quizCat).sort((a, b) => (review.solved[a.id] ? 1 : 0) - (review.solved[b.id] ? 1 : 0));
+    } else items = dueCards();
+    S.trainer = { kind, items, i: -1, item: null, node: null, msg: null };
+    nextItem();
+  }
+
+  function nextItem() {
+    const T = S.trainer;
+    while (++T.i < T.items.length) if (showItem(T.items[T.i])) return;
+    T.item = null;
+    render();
+  }
+
+  function showItem(item) {
+    const game = library.find((g) => g.id === item.gameId);
+    const target = game && lineOf(game)[item.ply];
+    if (!target || posKey(target.fen) !== posKey(item.fen)) {
+      // The game was deleted or edited; this card no longer points anywhere.
+      if (review.cards[item.id]) { delete review.cards[item.id]; saveReview(); }
+      return false;
+    }
+    if (!S.game || S.game.id !== game.id) loadGame(game.id);
+    const node = [S.root, ...mainLine()][item.ply];
+    // Answer options are shown in random order; options[0] is the right one.
+    const order = item.options ? item.options.map((_, i) => i) : [];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    Object.assign(S.trainer, { item, node, tries: 0, hinted: false, done: false, msg: null, order, picked: new Set() });
+    S.orientation = node.ply % 2 === 0 ? 'w' : 'b';
+    goTo(node);
+    return true;
+  }
+
+  async function trainerMove({ from, to, promotion }) {
+    const T = S.trainer;
+    const { item, node } = T;
+    const chess = new Chess(node.fen);
+    const san = chess.move({ from, to, promotion: promotion || 'q' }).san;
+    if (san === item.solution) return finishItem(san, 'exact');
+    S.selected = null;
+    S.wrong = [from, to];
+    if (item.kind === 'puzzle' && san === item.gameMove) {
+      T.tries++;
+      T.msg = { text: `✗ ${san} is the move from the game, the one to improve on. Try another.`, tone: 'text-red-400' };
+      renderBoard();
+      return renderTrainer();
+    }
+    if (item.exact) { // the question asks for one specific move, so the engine is not consulted
+      T.tries++;
+      T.msg = { text: `✗ ${san} is not the move. Try again.`, tone: 'text-red-400' };
+      renderBoard();
+      return renderTrainer();
+    }
+    T.msg = { text: `Checking ${san} with the engine…`, tone: 'text-slate-400' };
+    renderBoard();
+    renderTrainer();
+    S.checking = true;
+    let cmp = null;
+    try { cmp = await closeEnough(chess.fen(), fenAfter(node.fen, item.solution), node.ply % 2 ? 'b' : 'w'); }
+    catch { /* engine unavailable: only the exact answer counts */ }
+    S.checking = false;
+    if (S.trainer !== T || T.item !== item) return;
+    if (cmp && cmp.close) return finishItem(san, 'close', cmp);
+    T.tries++;
+    T.msg = cmp
+      ? { text: `✗ ${san} is not good enough (${fmtScore(cmp.mine)}, the best move keeps ${fmtScore(cmp.target)}). Try again.`, tone: 'text-red-400' }
+      : { text: `✗ ${san} is not the move. Try again.`, tone: 'text-red-400' };
+    renderTrainer();
+  }
+
+  // how: 'exact' | 'close' (as good as the answer) | 'shown' (gave up)
+  function finishItem(san, how, cmp) {
+    const T = S.trainer;
+    const { item } = T;
+    const success = how !== 'shown' && T.tries === 0 && !T.hinted;
+    T.done = true;
+    if (T.kind === 'review') gradeCard(item.id, success);
+    else if (success) { review.solved[item.id] = true; saveReview(); }
+    else addCard(item);
+
+    const ply = T.node.ply + 1;
+    const parts = [];
+    if (item.options) parts.push(how === 'shown' ? `The answer: ${item.options[0]}.` : '✓ Correct!');
+    else if (how === 'exact') parts.push(`✓ ${labelAt(ply, san)} is right!`);
+    else if (how === 'close') parts.push(`✓ ${labelAt(ply, san)} works too (${fmtScore(cmp.mine)}). The ${item.kind === 'puzzle' ? "engine's" : 'game'} move was ${labelAt(ply, item.solution)}.`);
+    else parts.push(`The answer is ${labelAt(ply, item.solution)}.`);
+    if (item.kind === 'puzzle') parts.push(`In the game, ${labelAt(ply, item.gameMove)} was a ${NAG_LABELS[item.gameNag].toLowerCase()}.`);
+    if (!success) parts.push(T.kind === 'review' ? 'It comes back tomorrow.' : 'Added to Review, so it comes back tomorrow.');
+    else if (T.kind === 'review') {
+      const card = review.cards[item.id];
+      parts.push(card ? `Next review in ${REVIEW_DAYS[card.box]} days.` : 'Learned! It leaves the review deck.');
+    }
+    T.msg = { text: parts.join(' '), tone: how === 'shown' ? 'text-amber-300' : 'text-emerald-400' };
+    if (!item.options) showTemp(T.node, how === 'shown' ? item.solution : san);
+    else if (item.move) showTemp(T.node, item.move); // the move the question was about
+    else render();
+  }
+
+  function pickChoice(i) {
+    const T = S.trainer;
+    if (!T || !T.item || T.done || T.picked.has(i)) return;
+    if (i === 0) return finishItem(null, 'exact');
+    T.tries++;
+    T.picked.add(i);
+    T.msg = { text: '✗ Not quite. Try again.', tone: 'text-red-400' };
+    renderTrainer();
+  }
+
+  // Shows a move on the board without adding it to the game.
+  function showTemp(parent, san) {
+    const c = new Chess(parent.fen);
+    const m = c.move(san);
+    S.node = { san: m.san, from: m.from, to: m.to, fen: c.fen(), ply: parent.ply + 1,
+      comment: '', nags: [], children: [], parent };
+    S.selected = null;
+    S.wrong = null;
+    render();
+  }
+
+  function trainerHint() {
+    const T = S.trainer;
+    if (!T || !T.item || T.item.options || T.done || S.checking) return;
+    T.hinted = true;
+    S.wrong = null;
+    S.selected = new Chess(T.node.fen).move(T.item.solution).from;
+    T.msg = { text: 'Hint: the highlighted piece moves.', tone: 'text-amber-300' };
+    renderBoard();
+    renderTrainer();
+  }
+
+  function trainerSolution() {
+    const T = S.trainer;
+    if (!T || !T.item || T.done || S.checking) return;
+    T.tries++;
+    finishItem(null, 'shown');
+  }
+
+  const whenText = (due) => {
+    const hours = Math.max(1, Math.round((due - Date.now()) / 3600000));
+    return hours < 20 ? `in about ${hours} hour${hours === 1 ? '' : 's'}` : hours < 36 ? 'tomorrow' : `in ${Math.round(hours / 24)} days`;
+  };
+
+  function trainerPrompt(T) {
+    const { item, node } = T;
+    const game = S.game;
+    const side = node.ply % 2 ? 'Black' : 'White';
+    const from = `${title(game)}${game.year ? `, ${game.year}` : ''}`;
+    if (item.kind === 'quiz') return item.options ? item.question : `${side} to move. ${item.question}`;
+    if (item.kind === 'game') return `${side} to move. From ${from}: what did ${node.ply % 2 ? game.black : game.white} play here?`;
+    return `${side} to move. In ${from}, ${labelAt(node.ply + 1, item.gameMove)} was a ${NAG_LABELS[item.gameNag].toLowerCase()}. Find a better move.`;
+  }
+
+  function trainerEmptyText(T, unanalysed) {
+    if (T.kind === 'quizzes') {
+      const where = prefs.quizCat === 'all' ? '' : ` in ${QUIZ_LABELS[prefs.quizCat]}`;
+      return T.items.length
+        ? `You have been through all ${T.items.length} quizzes${where}. Pick a category above to go again.`
+        : `No quizzes${where} right now. They are built on the built-in games: use Restore below the library to bring back games you deleted or changed.`;
+    }
+    if (T.kind === 'puzzle') {
+      if (T.items.length) return `You have been through all ${T.items.length} puzzles. Click Puzzles again to go round once more.`;
+      return unanalysed
+        ? `No puzzles yet. Puzzles come from the mistakes the engine finds, and ${unanalysed} game${unanalysed === 1 ? ' is' : 's are'} not analysed yet. Analysing takes a few minutes.`
+        : 'No puzzles: the engine found no mistakes or blunders in your games.';
+    }
+    const cards = Object.values(review.cards);
+    if (T.items.length) return `Review done for now.${cards.length ? ` Next one ${whenText(Math.min(...cards.map((c) => c.due)))}.` : ''}`;
+    if (!cards.length) return 'Nothing to review. Moves you miss in Guess the move, and puzzles and quizzes you cannot solve, come back here, spaced out over the following days.';
+    return `Nothing due right now. ${cards.length} position${cards.length === 1 ? ' is' : 's are'} waiting; the next one is due ${whenText(Math.min(...cards.map((c) => c.due)))}.`;
+  }
+
+  function renderTrainer() {
+    renderModeButtons();
+    const on = training() && !!S.trainer;
+    $('#trainer-panel').classList.toggle('hidden', !on);
+    if (!on) return;
+    const T = S.trainer;
+    const puzzles = T.kind === 'puzzle';
+    const quizzes = T.kind === 'quizzes';
+    const unanalysed = puzzles ? library.filter((g) => !isAnalysed(g)).length : 0;
+    renderQuizCats(quizzes);
+    $('#trainer-progress').textContent = T.item
+      ? [`${{ puzzle: 'Puzzle', review: 'Review', quizzes: 'Quiz' }[T.kind]} ${T.i + 1} of ${T.items.length}`,
+        T.item.kind === 'quiz' ? QUIZ_LABELS[T.item.cat] : '',
+        !T.done && T.kind !== 'review' && review.solved[T.item.id] ? 'solved before' : ''].filter(Boolean).join(' · ')
+      : '';
+    const msg = !T.item ? { text: trainerEmptyText(T, unanalysed), tone: 'text-slate-300' }
+      : T.msg || { text: trainerPrompt(T), tone: 'text-slate-300' };
+    $('#trainer-msg').textContent = msg.text;
+    $('#trainer-msg').className = `mt-1 ${msg.tone}`;
+    $('#trainer-status').textContent = puzzles ? S.allMsg || '' : '';
+    $('#trainer-status').classList.toggle('hidden', !(puzzles && S.allMsg));
+    renderChoices(T);
+    const explain = T.item && T.done && T.item.explain;
+    $('#trainer-explain').classList.toggle('hidden', !explain);
+    $('#trainer-explain').textContent = explain || '';
+    $('#btn-t-hint').classList.toggle('hidden', !T.item || T.done || !!T.item.options);
+    $('#btn-t-solution').classList.toggle('hidden', !T.item || T.done);
+    $('#btn-t-next').classList.toggle('hidden', !T.item);
+    $('#btn-t-next').textContent = T.done ? 'Next' : 'Skip';
+    const showAnalyze = puzzles && (unanalysed > 0 || S.analyzingAll);
+    $('#btn-t-analyze').classList.toggle('hidden', !showAnalyze);
+    $('#btn-t-analyze').textContent = S.analyzingAll ? 'Stop analysis'
+      : `Analyze ${unanalysed} game${unanalysed === 1 ? '' : 's'} for puzzles`;
+  }
+
+  // ---------- quizzes ----------
+  // Quizzes (quizzes.js) point at positions in the built-in games. A quiz is
+  // offered only while its game is in the library with the same moves up to it.
+  const QUIZ_LABELS = Object.fromEntries(window.QUIZ_CATEGORIES);
+  const quizPly = (at) => { const m = /^(\d+)(\.|\.\.\.)$/.exec(at); return m ? 2 * Number(m[1]) - (m[2] === '.' ? 2 : 1) : -1; };
+  const builtInLines = new Map(); // game id -> [root, ...main line] of the built-in version
+  function builtInLine(id) {
+    if (!builtInLines.has(id)) {
+      const d = window.DEFAULT_GAMES.find((g) => g.id === id);
+      let line = [];
+      try { if (d) { const root = PGN.buildTree(Chess, PGN.parsePgn(d.pgn).root); line = [root, ...PGN.mainLine(root)]; } }
+      catch { /* a broken built-in game has no quizzes */ }
+      builtInLines.set(id, line);
+    }
+    return builtInLines.get(id);
+  }
+
+  function collectQuizzes(cat) {
+    return window.QUIZZES.filter((q) => cat === 'all' || q.cat === cat).map((q) => {
+      const ply = quizPly(q.at);
+      const pos = builtInLine(q.game)[ply];
+      const game = library.find((g) => g.id === q.game);
+      const now = game && lineOf(game)[ply];
+      if (!pos || !now || posKey(pos.fen) !== posKey(now.fen)) return null;
+      return { id: `q:${q.id}`, kind: 'quiz', cat: q.cat, gameId: q.game, ply, fen: pos.fen, question: q.q,
+        solution: q.solution, exact: !!q.exact, options: q.options, move: q.move, explain: q.explain };
+    }).filter(Boolean);
+  }
+
+  function renderQuizCats(show) {
+    const box = $('#quiz-cats');
+    box.classList.toggle('hidden', !show);
+    if (!show) return;
+    const cats = [['all', 'All'], ...window.QUIZ_CATEGORIES];
+    box.replaceChildren(...cats.map(([key, label]) => {
+      const qs = window.QUIZZES.filter((q) => key === 'all' || q.cat === key);
+      const solved = qs.filter((q) => review.solved[`q:${q.id}`]).length;
+      const on = prefs.quizCat === key;
+      const b = el('button', `rounded-full px-3 py-1 text-xs ${on ? 'bg-amber-500 text-slate-900 font-semibold' : 'bg-slate-700 hover:bg-slate-600 text-slate-200'}`, label);
+      b.appendChild(el('span', `ml-1.5 ${on ? 'text-slate-800' : 'text-slate-400'}`, `${solved}/${qs.length}`));
+      b.title = `${solved} of ${qs.length} solved on the first try`;
+      b.addEventListener('click', () => {
+        if (S.checking) return;
+        prefs.quizCat = key;
+        savePrefs();
+        startTrainer('quizzes');
+      });
+      return b;
+    }));
+  }
+
+  function renderChoices(T) {
+    const box = $('#trainer-choices');
+    const item = T.item;
+    box.classList.toggle('hidden', !(item && item.options));
+    if (!item || !item.options) return box.replaceChildren();
+    box.replaceChildren(...T.order.map((i) => {
+      const right = T.done && i === 0;
+      const wrong = T.picked.has(i);
+      const cls = right ? 'bg-emerald-600 text-white font-medium'
+        : wrong ? 'bg-red-950/70 text-red-300'
+        : T.done ? 'bg-slate-800 text-slate-500' : 'bg-slate-700 hover:bg-slate-600';
+      const b = el('button', `text-left rounded px-3 py-1.5 ${cls}`, `${right ? '✓ ' : wrong ? '✗ ' : ''}${item.options[i]}`);
+      b.disabled = T.done || wrong;
+      b.addEventListener('click', () => pickChoice(i));
+      return b;
+    }));
+  }
+
+  // ---------- guess-the-move mode ----------
 
   const sideToMove = () => (S.node.ply % 2 === 0 ? 'w' : 'b');
   const quizMsg = (text, tone = 'text-slate-300') => {
@@ -854,7 +1389,7 @@
     if (S.mode !== 'quiz' || !S.game) return;
     clearTimeout(S.timer);
     if (!S.node.children.length) {
-      quizMsg(`End of game (${S.game.result}). You found ${S.score.right} of the moves on your first try. Press ⏮ to try again.`, 'text-amber-300');
+      quizMsg(`End of game (${S.game.result}). You scored ${S.score.points} out of ${S.score.tries}. Moves you missed come back in Review. Press ⏮ to try again.`, 'text-amber-300');
       return;
     }
     if (sideToMove() !== prefs.quizSide) {
@@ -867,17 +1402,25 @@
   }
 
   function renderQuiz() {
-    const { right, tries } = S.score;
-    $('#quiz-score').textContent = tries ? `· ${right}/${tries} correct` : '';
+    const { points, tries } = S.score;
+    $('#quiz-score').textContent = tries ? `· ${points}/${tries} points` : '';
   }
 
-  function tryMove(from, to, promotion) {
-    const expected = S.node.children[0];
+  // A position you could not find on the first try comes back in Review.
+  function rememberMiss(node) {
+    addCard({ id: `g:${S.game.id}:${node.ply}`, kind: 'game', gameId: S.game.id, ply: node.ply,
+      fen: node.fen, solution: node.children[0].san });
+  }
+
+  async function tryMove(from, to, promotion) {
+    const node = S.node;
+    const expected = node.children[0];
     const firstTry = !S.wrong && !S.hinted;
-    const chess = new Chess(S.node.fen);
+    const chess = new Chess(node.fen);
     const san = chess.move({ from, to, promotion: promotion || 'q' }).san;
     if (san === expected.san) {
-      if (firstTry) S.score.right++;
+      if (firstTry) S.score.points++;
+      else rememberMiss(node);
       S.score.tries++;
       goTo(expected);
       if (S.node.children.length) {
@@ -885,12 +1428,32 @@
       }
       return;
     }
-    const known = S.node.children.find((c) => c.san === san);
     S.selected = null;
     S.wrong = [from, to];
     renderBoard();
-    quizMsg(known
-      ? `✗ ${san} is analysed as an alternative here, but it is not what was played. Try again.`
+
+    // Not the game move, but maybe just as good: ask the engine.
+    quizMsg(`Checking ${san} with the engine…`, 'text-slate-400');
+    S.checking = true;
+    let cmp = null;
+    try { cmp = await closeEnough(chess.fen(), expected.fen, sideToMove()); } catch { /* engine unavailable */ }
+    S.checking = false;
+    if (S.mode !== 'quiz' || S.node !== node) return;
+    if (cmp && cmp.close && firstTry) {
+      S.score.points += 0.5;
+      S.score.tries++;
+      goTo(expected);
+      quizMsg(`≈ ${san} is about as good as the game move (${fmtScore(cmp.mine)} vs ${fmtScore(cmp.target)}). Half a point! The game went ${moveLabel(expected)}.`, 'text-sky-300');
+      clearTimeout(S.timer);
+      S.timer = setTimeout(quizStep, 3000);
+      return;
+    }
+    if (cmp && cmp.close) {
+      quizMsg(`≈ ${san} is about as good as the game move, but find what was actually played to continue.`, 'text-sky-300');
+      return;
+    }
+    quizMsg(cmp
+      ? `✗ ${san} is weaker than the game move (${fmtScore(cmp.mine)} vs ${fmtScore(cmp.target)}). Try again.`
       : `✗ ${san} is legal, but it is not what was played. Try again.`, 'text-red-400');
   }
 
@@ -904,8 +1467,9 @@
   }
 
   function reveal() {
-    if (S.mode !== 'quiz' || !S.node.children.length || sideToMove() !== prefs.quizSide) return;
+    if (S.mode !== 'quiz' || S.checking || !S.node.children.length || sideToMove() !== prefs.quizSide) return;
     S.score.tries++;
+    rememberMiss(S.node);
     const move = S.node.children[0];
     goTo(move);
     quizMsg(`The game move was ${move.san}. Read the note, then continue.`, 'text-amber-300');
@@ -1070,7 +1634,7 @@
     const m = e.target.closest('[data-id]');
     if (!m) return;
     stopAutoplay();
-    if (S.mode === 'quiz') setMode('replay');
+    if (S.mode !== 'replay') setMode('replay');
     goTo(S.nodes.get(Number(m.dataset.id)));
   });
   $('#btn-mainline').addEventListener('click', () => goTo(mainAncestor(S.node)));
@@ -1092,6 +1656,10 @@
     savePrefs();
     setMode('quiz');
   });
+  $('#btn-t-hint').addEventListener('click', trainerHint);
+  $('#btn-t-solution').addEventListener('click', trainerSolution);
+  $('#btn-t-next').addEventListener('click', () => { if (S.trainer && !S.checking) nextItem(); });
+  $('#btn-t-analyze').addEventListener('click', analyzeAll);
   $('#engine-toggle').addEventListener('change', (e) => enableEngine(e.target.checked));
   $('#btn-analyze').addEventListener('click', analyzeGame);
   $('#btn-play-best').addEventListener('click', () => {

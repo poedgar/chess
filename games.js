@@ -127,5 +127,63 @@ window.DEFAULT_GAMES = [
 36... Rd2 37. Rd7 Rxd7 38. Bxc4 bxc4 39. Qxh8 {The tactics are over. White is a clean exchange and a pawn up.}
 39... Rd3 40. Qa8 c3 41. Qa4+ Ke1 42. f4 f5 43. Kc1 Rd2 44. Qa7 {Black resigned. The c-pawn falls and White's extra material wins.}
 1-0`
+  },
+  {
+    id: 'reti-tartakower',
+    white: 'Richard Réti',
+    black: 'Savielly Tartakower',
+    event: 'Vienna (casual game)',
+    year: '1910',
+    result: '1-0',
+    opening: 'Caro-Kann Defence',
+    tags: ['miniature', 'queen sacrifice', 'double check'],
+    pgn: `{A miniature every player should know. Black grabs material in the opening, and White punishes him with a queen sacrifice and a double check.}
+1. e4 c6 2. d4 d5 3. Nc3 dxe4 4. Nxe4 Nf6 5. Qd3 {An unusual move. The queen will be useful on the d-file.}
+5... e5 {A pawn sacrifice to free Black's game, but it also opens the d-file toward Black's king.}
+6. dxe5 Qa5+ 7. Bd2 Qxe5 8. O-O-O! {White leaves the e4-knight hanging. The rook joins the d-file behind the queen.}
+8... Nxe4? {Black takes the bait. It looks natural but loses at once.}
+9. Qd8+!! {The queen sacrifice. Black must take, and the king lands on the open d-file.}
+9... Kxd8 10. Bg5+ {Double check from the bishop and the d1-rook. Only a king move can answer a double check.}
+10... Kc7 (10... Ke8 11. Rd8#) 11. Bd8# {Mate by a bishop that the king cannot take, because the d1-rook guards it.}
+1-0`
+  },
+  {
+    id: 'lasker-bauer',
+    white: 'Emanuel Lasker',
+    black: 'Johann Bauer',
+    event: 'Amsterdam',
+    year: '1889',
+    result: '1-0',
+    opening: "Bird's Opening",
+    tags: ['double bishop sacrifice', 'attack', 'fork'],
+    pgn: `{The first famous double bishop sacrifice. Lasker gives both bishops to strip away the pawns in front of Black's king, brings his rook across, and wins material with a queen fork. The pattern Bxh7+ and Bxg7 is still called "Lasker's combination".}
+1. f4 d5 2. e3 Nf6 3. b3 e6 4. Bb2 Be7 5. Bd3 b6 6. Nc3 Bb7 7. Nf3 Nbd7 8. O-O O-O 9. Ne2 c5 10. Ng3 Qc7 11. Ne5 Nxe5 12. Bxe5 Qc6 13. Qe2 a6 {Black has not noticed the danger on the kingside.}
+14. Nh5 {Removing the f6-knight, the key defender of h7.}
+14... Nxh5 15. Bxh7+! {The first bishop sacrifice.}
+15... Kxh7 16. Qxh5+ Kg8 17. Bxg7! {The second bishop. Now the king has no pawn shield at all.}
+17... Kxg7 18. Qg4+ Kh7 19. Rf3 {The rook swings over along the third rank and threatens Rh3 mate.}
+19... e5 {This clears e6 so the queen can reach h6 and block the coming check.}
+20. Rh3+ Qh6 21. Rxh6+ Kxh6 22. Qd7! {The point of the combination: the queen forks both black bishops.}
+22... Bf6 23. Qxb7 {The material is roughly level, but Black's king is open and White's queen dominates.}
+23... Kg7 24. Rf1 Rab8 25. Qd7 Rfd8 26. Qg4+ Kf8 27. fxe5 Bg7 28. e6 Rb7 29. Qg6 f6 30. Rxf6+ Bxf6 31. Qxf6+ Ke8 32. Qh8+ Ke7 33. Qg7+ Kxe6 34. Qxb7 Rd6 35. Qxa6 d4 36. exd4 cxd4 37. h4 d3 38. Qxd3 {Black resigned.}
+1-0`
+  },
+  {
+    id: 'deep-blue-kasparov',
+    white: 'Deep Blue',
+    black: 'Garry Kasparov',
+    event: 'IBM Man-Machine Match, New York (game 6)',
+    year: '1997',
+    result: '1-0',
+    opening: 'Caro-Kann Defence, Karpov Variation',
+    tags: ['computer', 'knight sacrifice', 'king in centre'],
+    pgn: `{The deciding game of the 1997 rematch. Kasparov chose a Caro-Kann line he rarely played and walked into a known knight sacrifice. With this win Deep Blue became the first computer to beat a reigning world champion in a match at classical time controls.}
+1. e4 c6 2. d4 d5 3. Nc3 dxe4 4. Nxe4 Nd7 5. Ng5 {A sharp line. The knight eyes f7 and e6.}
+5... Ngf6 6. Bd3 e6 7. N1f3 h6? {A known mistake in this line. It allows the sacrifice on e6.}
+8. Nxe6! {White gives a knight to keep Black's king stuck in the centre.}
+8... Qe7 9. O-O fxe6 10. Bg6+ Kd8 {The king has lost the right to castle and stays in the middle of the board.}
+11. Bf4 b5 12. a4 Bb7 13. Re1 Nd5 14. Bg3 Kc8 15. axb5 cxb5 16. Qd3 Bc6 17. Bf5 {Attacking e6 again and inviting more open lines.}
+17... exf5 18. Rxe7 Bxe7 19. c4 {Black resigned, facing a decisive attack against his exposed king.}
+1-0`
   }
 ];

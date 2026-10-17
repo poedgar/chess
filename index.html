@@ -5,28 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chess Classics</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="board.css">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
   <style>
-    #board { container-type: inline-size; }
-    .sq { position: relative; display: flex; align-items: center; justify-content: center; user-select: none; }
-    .sq.light { background: #eedfc4; }
-    .sq.dark { background: #b0855c; }
-    .sq.last::before { content: ''; position: absolute; inset: 0; background: rgba(250, 204, 21, .42); }
-    .sq.sel::before { content: ''; position: absolute; inset: 0; background: rgba(34, 197, 94, .45); }
-    .sq.check::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle, rgba(239,68,68,.9) 0%, rgba(239,68,68,.35) 55%, transparent 75%); }
-    .sq.target::after { content: ''; position: absolute; width: 30%; height: 30%; border-radius: 9999px; background: rgba(15, 23, 42, .28); }
-    .sq.target.occupied::after { width: 88%; height: 88%; background: transparent; border: 5px solid rgba(15, 23, 42, .28); }
-    .sq.wrong::before { content: ''; position: absolute; inset: 0; background: rgba(239, 68, 68, .5); }
-    .piece { position: relative; z-index: 1; font-size: 10cqw; line-height: 1; cursor: default; }
-    .piece.w { color: #fff; -webkit-text-stroke: 1.4px #1f2937; text-shadow: 0 2px 2px rgba(0,0,0,.35); }
-    .piece.b { color: #111827; text-shadow: 0 1px 1px rgba(255,255,255,.25); }
-    .piece { cursor: pointer; }
-    .coord { position: absolute; font-size: 2.1cqw; font-weight: 600; z-index: 2; pointer-events: none; }
-    .coord.file { right: 4%; bottom: 2%; }
-    .coord.rank { left: 4%; top: 2%; }
-    .light .coord { color: #b0855c; }
-    .dark .coord { color: #eedfc4; }
     .mv { cursor: pointer; border-radius: .25rem; padding: 0 .3rem; }
     .mv:hover { background: rgba(148, 163, 184, .25); }
     .mv.cur { background: #f59e0b; color: #111827; font-weight: 600; }
@@ -61,6 +43,7 @@
         <h1 class="text-lg font-semibold tracking-tight">Chess Classics</h1>
         <p class="text-xs text-slate-400">Learn from famous games, move by move</p>
       </div>
+      <a href="quiz.html" class="text-sm font-medium text-slate-200 hover:text-amber-400 rounded-lg px-3 py-2 ring-1 ring-slate-700 hover:ring-amber-500/60">Quizzes</a>
       <button id="btn-add" class="bg-amber-500 hover:bg-amber-400 text-slate-900 font-semibold text-sm rounded-lg px-3 py-2">+ Add game</button>
     </div>
   </header>

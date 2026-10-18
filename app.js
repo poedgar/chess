@@ -1381,6 +1381,7 @@
     S.selected = S.wrong = null;
     renderBoard();
     renderTrainer();
+    revealBoard();
     replay.timer = setInterval(() => {
       if (S.trainer !== T) return stopReplay();
       const c = new Chess(pos.fen);
@@ -1391,8 +1392,16 @@
       }
       if (!m || replay.step >= T.item.line.length - 1) stopReplay();
       renderBoard();
+      if (m) $('#turn').textContent = `${moveLabel(pos)}${new Chess(pos.fen).in_checkmate() ? ' · Checkmate' : ''}`;
       renderTrainer();
     }, 900);
+  }
+
+  // On narrow screens the board is above the trainer panel and may be scrolled away.
+  function revealBoard() {
+    const r = $('#board').getBoundingClientRect();
+    if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+    $('#board').scrollIntoView({ behavior: 'smooth', block: r.height > window.innerHeight ? 'start' : 'center' });
   }
 
   function renderReplay(T) {

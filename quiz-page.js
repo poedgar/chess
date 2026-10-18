@@ -256,15 +256,30 @@
     P.step = -1;
     Object.assign(B, { fen: item.fen, last: Q.startLast, selected: null, wrong: null });
     renderBoard();
+    revealBoard();
     P.timer = setInterval(() => {
       const m = c.move(item.line[++P.step]);
       if (m) Object.assign(B, { fen: c.fen(), last: [m.from, m.to] });
       if (!m || P.step >= item.line.length - 1) stopReplay();
       renderBoard();
+      if (m) $('#turn').textContent = `${replayLabel(item, P.step)}${c.in_checkmate() ? ' · Checkmate' : ''}`;
       renderReplay();
     }, 900);
     renderReplay();
   }
+
+  // On narrow screens the board is above the panel and may be scrolled away.
+  function revealBoard() {
+    const r = $('#board').getBoundingClientRect();
+    if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+    $('#board').scrollIntoView({ behavior: 'smooth', block: r.height > window.innerHeight ? 'start' : 'center' });
+  }
+
+  const replayLabel = (item, k) => {
+    const ply = item.ply + 1 + k;
+    const san = item.line[k];
+    return ply % 2 ? `${(ply + 1) / 2}. ${san}` : `${ply / 2}... ${san}`;
+  };
 
   function renderReplay() {
     const { item } = Q;
@@ -273,8 +288,7 @@
     if (!show) return;
     $('#btn-replay').textContent = P.timer ? '■ Stop' : P.step >= 0 ? '↺ Play again' : '▶ Play the answer';
     $('#run-line').replaceChildren(...item.line.map((san, k) => {
-      const ply = item.ply + 1 + k;
-      const text = ply % 2 ? `${(ply + 1) / 2}. ${san}` : k === 0 ? `${ply / 2}... ${san}` : san;
+      const text = (item.ply + 1 + k) % 2 || k === 0 ? replayLabel(item, k) : san;
       return el('span', `mr-1.5 ${k === P.step ? 'text-amber-300 font-semibold' : k < P.step ? 'text-slate-200' : ''}`, text);
     }));
   }
